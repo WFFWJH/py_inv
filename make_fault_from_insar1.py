@@ -83,6 +83,63 @@ def _pad_zero_cols(A: np.ndarray, extra: int) -> np.ndarray:
     return np.concatenate([A, np.zeros((A.shape[0], extra), dtype=A.dtype)], axis=1)
 
 
+def _matlab_col(v: np.ndarray) -> np.ndarray:
+    """1D / (n,1) -> MATLAB 列向量 (n, 1), float64."""
+    return np.ascontiguousarray(np.asarray(v, dtype=np.float64).reshape(-1, 1))
+
+
+def _matlab_scalar_double(v) -> np.ndarray:
+    """标量 -> MATLAB double 标量."""
+    return np.array(float(v), dtype=np.float64)
+
+
+def build_greens_mat_dict(
+    *,
+    G_last: np.ndarray,
+    Bdata: np.ndarray,
+    bd_last: np.ndarray,
+    slip_model: np.ndarray,
+    bdata_sm: np.ndarray,
+    GrF: np.ndarray,
+    H: np.ndarray,
+    h1,
+    Wb: np.ndarray,
+    Wl: np.ndarray,
+    Wr: np.ndarray,
+    ramp_choice: str,
+    u: np.ndarray,
+    return_var: Optional[np.ndarray] = None,
+    RMS_misfit: Optional[float] = None,
+    model_roughness: Optional[float] = None,
+    class_map: Optional[np.ndarray] = None,
+) -> dict:
+    """组装与 MATLAB ``save('greens_okada.mat', ...)`` 兼容的变量 dict."""
+    out = {
+        "G_last": np.ascontiguousarray(G_last, dtype=np.float64),
+        "Bdata": _matlab_col(Bdata),
+        "bd_last": _matlab_col(bd_last),
+        "slip_model": np.ascontiguousarray(slip_model, dtype=np.float64),
+        "bdata_sm": _matlab_col(bdata_sm),
+        "GrF": np.ascontiguousarray(GrF, dtype=np.float64),
+        "H": np.ascontiguousarray(H, dtype=np.float64),
+        "h1": _matlab_scalar_double(h1),
+        "Wb": np.ascontiguousarray(Wb, dtype=np.float64),
+        "Wl": np.ascontiguousarray(Wl, dtype=np.float64),
+        "Wr": np.ascontiguousarray(Wr, dtype=np.float64),
+        "ramp_choice": ramp_choice,
+        "u": _matlab_col(u),
+    }
+    if return_var is not None:
+        out["return_var"] = _matlab_col(return_var)
+    if RMS_misfit is not None:
+        out["RMS_misfit"] = _matlab_scalar_double(RMS_misfit)
+    if model_roughness is not None:
+        out["model_roughness"] = _matlab_scalar_double(model_roughness)
+    if class_map is not None:
+        out["class_map"] = np.ascontiguousarray(class_map, dtype=np.float64).reshape(-1, 1)
+    return out
+
+
 def make_fault_from_insar1(slip_model_vs: np.ndarray,
                            slip_model_ds: Optional[np.ndarray],
                            iter_step: int,
@@ -385,12 +442,17 @@ def make_fault_from_insar1(slip_model_vs: np.ndarray,
                 print("plot_resampled -> %s" % os.path.normpath(str(out_png)), flush=True)
 
     if save_greens_path:
-        savemat(save_greens_path, {
-            "G_last": G_last, "Bdata": Bdata, "bd_last": bd_last,
-            "slip_model": slip_model, "bdata_sm": bdata_sm, "GrF": GrF,
-            "H": H, "h1": h1, "Wb": Wb, "Wl": Wl, "Wr": Wr,
-            "ramp_choice": ramp_choice, "u": u,
-        }, do_compression=True)
+        savemat(
+            save_greens_path,
+            build_greens_mat_dict(
+                G_last=G_last, Bdata=Bdata, bd_last=bd_last,
+                slip_model=slip_model, bdata_sm=bdata_sm, GrF=GrF,
+                H=H, h1=h1, Wb=Wb, Wl=Wl, Wr=Wr,
+                ramp_choice=ramp_choice, u=u,
+            ),
+            do_compression=True,
+            oned_as="column",
+        )
         if verbose:
             print(f"Saved Greens snapshot -> {save_greens_path}")
 

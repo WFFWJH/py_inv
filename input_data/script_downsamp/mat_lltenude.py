@@ -258,8 +258,8 @@ def lltenude_to_mat(txt_file, out_mat=None):
      data[:,6:7],
      data[:,3:6]
     ])
-    dem_out = data[:, 2].reshape(-1, 1)
-    rms_out = data[:, 7].reshape(-1, 1)
+    dem_out = np.ascontiguousarray(data[:, 2:3], dtype=np.float64)
+    rms_out = np.ascontiguousarray(data[:, 7:8], dtype=np.float64)
 
     if out_mat is None:
         out_mat = os.path.splitext(txt_file)[0] + '.mat'
@@ -267,8 +267,8 @@ def lltenude_to_mat(txt_file, out_mat=None):
     savemat(out_mat, {
         'sampled_insar_data': sampled,
         'dem_out': dem_out,
-        'rms_out': rms_out
-    })
+        'rms_out': rms_out,
+    }, oned_as='column')
 
     print(f"[TXT → MAT] Saved: {out_mat}")
 

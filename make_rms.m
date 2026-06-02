@@ -1,11 +1,11 @@
 addpath ./matlab_code/  
 
 lambda = 1;
-    h1 = double(h1);
-    bdata_sm = bdata_sm';
-bd_last = bd_last';
-Bdata = Bdata';
-u1 = u';
+%     h1 = double(h1);
+%     bdata_sm = bdata_sm';
+% bd_last = bd_last';
+% Bdata = Bdata';
+% u1 = u';
 %%
     % Greens = [G_raw;H*lambda/h1;Wb;Wl;Wr];
     Greens = [G_last;H*lambda/h1;Wb;Wl;Wr];
@@ -38,7 +38,6 @@ end
         'TolCon',1e-12,'TolFun',1e-12,'TolPCG',1e-12,'TolX',1e-12,'MaxIter',1e9,'MaxPCGIter',1e9,'Diagnostics','on','Display','iter');
     [u,resnorm,residual,exitflag] = lsqlin(Greens,double(bdata_sm),[],[],[],[],lb,ub,[],options);
     % [u,resnorm,residual,exitflag] = lsqlin(GrF,double(Bdata),[],[],[],[],lb,ub,[],options);
-fprintf("u1-u max:%f\n",max(u1-u));
 
     % compute the reduction of total variance (before weighing) of the downsampled data
     rms0 = sum(Bdata.^2);

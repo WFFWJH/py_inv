@@ -24,7 +24,7 @@ import numpy as np
 from scipy.io import loadmat, savemat
 
 from load_fault_one_plane import load_fault_one_plane
-from make_fault_from_insar1 import make_fault_from_insar1
+from make_fault_from_insar1 import build_greens_mat_dict, make_fault_from_insar1
 from make_insar_data import make_insar_data
 from resamp_insar_data import resamp_insar_data
 from show_slip_model import show_slip_model
@@ -106,19 +106,27 @@ def _save_inversion_mat(
 ) -> None:
     savemat(
         out_mat,
-        {
-            "slip_model": slip,
-            "G_last": extras["G_last"], "Bdata": extras["Bdata"],
-            "bd_last": extras["bd_last"], "bdata_sm": extras["bdata_sm"],
-            "GrF": extras["GrF"],
-            "H": extras["H"], "h1": extras["h1"],
-            "Wb": extras["Wb"], "Wl": extras["Wl"], "Wr": extras["Wr"],
-            "ramp_choice": ramp_choice, "u": extras["u"],
-            "return_var": ret,
-            "RMS_misfit": rms_m, "model_roughness": rough,
-            "class_map": extras["class_map"],
-        },
+        build_greens_mat_dict(
+            G_last=extras["G_last"],
+            Bdata=extras["Bdata"],
+            bd_last=extras["bd_last"],
+            slip_model=slip,
+            bdata_sm=extras["bdata_sm"],
+            GrF=extras["GrF"],
+            H=extras["H"],
+            h1=extras["h1"],
+            Wb=extras["Wb"],
+            Wl=extras["Wl"],
+            Wr=extras["Wr"],
+            ramp_choice=ramp_choice,
+            u=extras["u"],
+            return_var=ret,
+            RMS_misfit=rms_m,
+            model_roughness=rough,
+            class_map=extras["class_map"],
+        ),
         do_compression=True,
+        oned_as="column",
     )
     print("Saved -> %s" % out_mat, flush=True)
 
@@ -762,80 +770,6 @@ def run_workflow_steps(
         step_show2(state, show_figure=show_figure)
 
     return state
-
-
-# ---------------------------------------------------------------------------
-# 兼容旧 API (geodetic_api 等仍可调)
-# ---------------------------------------------------------------------------
-def run_inversion_example_prelude152(
-    config_dir: Optional[Union[str, os.PathLike]] = None,
-    *,
-    skip_downsample: bool = False,
-    out_mat: Optional[str] = None,
-    out_png: Optional[str] = None,
-    make_insar_save_plot: bool = True,
-    show_figure: bool = True,
-    dip_per_segment: Optional[Sequence[float]] = None,
-) -> Tuple[object, ...]:
-    """Step0–5 + show1. 返回 slip, rms, rough, ret, extras, out_mat, out_png."""
-    state = run_workflow_steps(
-        InversionWorkflowState(),
-        start_step=0,
-        end_step=5,
-        config_dir=config_dir,
-        dip_per_segment=dip_per_segment,
-        skip_downsample=skip_downsample,
-        make_insar_save_plot=make_insar_save_plot,
-        show_figure=show_figure,
-        out_mat=out_mat,
-        out_png=out_png,
-    )
-    return (
-        state.slip, state.rms, state.rough, state.ret, state.extras,
-        state.out_mat, state.out_png,
-    )
-
-
-def run_inversion_example_to_162(
-    config_dir: Optional[Union[str, os.PathLike]] = None,
-    *,
-    skip_downsample: bool = False,
-    out_mat: Optional[str] = None,
-    out_png: Optional[str] = None,
-    out_mat_step2: Optional[str] = None,
-    out_png_step2: Optional[str] = None,
-    make_insar_save_plot: bool = True,
-    show_figure: bool = True,
-    dip_per_segment: Optional[Sequence[float]] = None,
-    dec: int = 1,
-    patch_workers: Optional[int] = None,
-) -> Tuple[
-    np.ndarray, float, float, object, object, str, str,
-    np.ndarray, float, float, object, object, str, str,
-]:
-    """全流程 Step0–7. 返回两次反演结果及输出路径."""
-    state = run_workflow_steps(
-        InversionWorkflowState(),
-        start_step=0,
-        end_step=7,
-        config_dir=config_dir,
-        dip_per_segment=dip_per_segment,
-        skip_downsample=skip_downsample,
-        make_insar_save_plot=make_insar_save_plot,
-        show_figure=show_figure,
-        dec=dec,
-        patch_workers=patch_workers,
-        out_mat=out_mat,
-        out_png=out_png,
-        out_mat_step2=out_mat_step2,
-        out_png_step2=out_png_step2,
-    )
-    return (
-        state.slip, state.rms, state.rough, state.ret, state.extras,
-        state.out_mat, state.out_png,
-        state.slip2, state.rms2, state.rough2, state.ret2, state.extras2,
-        state.out_mat_step2, state.out_png_step2,
-    )
 
 
 if __name__ == "__main__":
