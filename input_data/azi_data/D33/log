@@ -1,0 +1,22 @@
+Input file:   D33_azi.llde
+DEM file:     dem.grd
+Base name:    D33_azi
+Will create:  D33_azi.ll, D33_azi.llt, D33_azi.lltenu, D33_azi.lltenude
+
+[1/5] Extracting first two columns -> D33_azi.ll
+  -> done (D33_azi.ll)
+[2/5] Running: gmt grdtrack D33_azi.ll -Gdem.grd > D33_azi.llt
+  -> done (D33_azi.llt)
+[3/5] Searching for a .PRM file in current directory...
+  Found PRM: ./S1_20250319_232429_F2.PRM
+[4/5] Running: SAT_look ./S1_20250319_232429_F2.PRM < D33_azi.llt > D33_azi.lltenu
+  -> done (D33_azi.lltenu)
+[5/5] Appending last two cols of D33_azi.llde to D33_azi.lltenu -> D33_azi.lltenude
+  -> done (D33_azi.lltenude)
+
+All steps finished.
+Outputs:
+  D33_azi.ll
+  D33_azi.llt
+  D33_azi.lltenu
+  D33_azi.lltenude

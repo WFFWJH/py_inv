@@ -1,0 +1,18 @@
+#############Configuration File for Geodetic Inversion, For Files#################
+##grdin
+#InSAR grid input
+./myanmar/D106/LOS/unwrap_ll.grd
+##grdout
+#InSAR grid output
+./myanmar/D106/LOS/los_clean_detrend.grd
+##data_list
+#list of InSAR directories that are to be downsampled (Format: this_track, number_of_sampled_points(e.g.,3000))
+detrend.list
+##fault_file
+#file that writes linearized fault segments (Format: lon1 lat1 lon2 lat2, each pair correponds to one fault end)
+fault_trace.txt
+##segment_smooth_file
+#The continuity between each fault plane (format: fault_ID1, left/right, fault_ID2, right/left. The starting point of the fault is presumed as "left")
+seg_connect
+##segment_file
+seg_connect

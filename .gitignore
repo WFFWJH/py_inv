@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.vscode/
+
+# data
+data/
+raw/
+output/
+
+# large files
+*.grd
+*.mat
+*.SAFE
+*.zip
