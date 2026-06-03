@@ -25,7 +25,7 @@ function [lb,ub]=bounds_new(NS,NT,tSm,add_col,Con)
 %  ub(j:NT:length(ub))=0;
 % end  
 %end  
-slip_max = 10e2;
+slip_max = 10;
 Npatch = sum(tSm);
 lb=-slip_max*ones(NT*Npatch,1);  %lower bound in cm
 ub= slip_max*ones(NT*Npatch,1);  %upper bound

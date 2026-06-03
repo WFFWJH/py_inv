@@ -71,7 +71,7 @@ latc=para(6);%coordinate of reference point (0,0)
 iter_step=para(7);
 iter_step2=para(8);
 
-dip_angle=[80 80 90 110];%the array of fault ids that have dip angles not equal to 90 degrees
+dip_angle=[82 82 82 82];%the array of fault ids that have dip angles not equal to 90 degrees
 ramp_choice = "qu_ramp_7";
 
 % dip_angle = [62 88 91 97 ]
@@ -115,8 +115,8 @@ while tmp_txt ~= -1
     npt(count) = str2double(strs{2});
     num_of_strs = size(strs,2);
     % replaced by the region defined in the data_list
-    if num_of_strs >= 6, region(count,:) = str2double(strs(3:6)); end   
-    data_types(count) = cellstr(strs{7});
+    if num_of_strs >= 6, region(count,:) = str2double(strs(3:6));data_types(count) = cellstr(strs{7}); end   
+    data_types(count) = cellstr(strs{3});
     tmp_txt = fgetl(fid);
 end
 fclose(fid);
@@ -125,7 +125,7 @@ for i = 1:ntrack
     if strcmp(data_types(i),'insar')
         Nmin(i) = 8;
         Nmax(i) = 500;
-    elseif strcmp(data_types(i),'azi')
+    elseif strcmp(data_types(i),'azo')
         Nmin(i) = 4;
         Nmax(i) = 50;
     end
@@ -137,11 +137,11 @@ make_insar_data(track,npt,region,Nmin,Nmax,'method','quadtree','fault',fault_fil
 %% Step 4: Build the fault geometry
 % slip_model_vs = load_fault_one_plane(fault_file,'dip_change_id',dip_change_id,'dip',dip_angle,'lonc',lonc,'latc',latc,'ref_lon',ref_lon,...
 %     'width',20e3,'len_top',1e3,'layers',5);
-slip_model_vs = load_fault_one_plane(fault_file,'dip',dip_angle,'lonc',lonc,'latc',latc,'ref_lon',ref_lon,'w_ratio',1.2,...
+slip_model_vs = load_fault_one_plane(fault_file,'dip',dip_angle,'lonc',lonc,'latc',latc,'ref_lon',ref_lon,'w_ratio',1.1,'l_ratio',1.2,...
     'width',20e3,'len_top',2e3,'layers',5);
 
 %% Step 5: inversion using first downsampled data
-[slip_model,~,~] = make_fault_from_insar1(slip_model_vs,slip_model_ds,iter_step,track, ...
+[slip_model,~,~] = make_fault_from_insar1(slip_model_vs,slip_model_ds,iter_step,track,data_types, ...
                 'ramp',ramp_choice,'segment_smooth_file',segment_file,'intersect_smooth_file',intersect_file,...
                 'fault',fault_file,'lonc',lonc,'latc',latc,'ref_lon',ref_lon,'model_type','okada');
 % iint=iter_step;
@@ -156,7 +156,7 @@ resamp_insar_data(slip_model,track,npt,Nmin,Nmax,data_types, iter_step2, 'fault'
 
 %% Step7: inversion using resampled data
 iint=iter_step2;
-[slip_model,rms1,model_roughness] = make_fault_from_insar1(slip_model_vs,slip_model_ds,iter_step2,track, ...
+[slip_model,rms1,model_roughness] = make_fault_from_insar1(slip_model_vs,slip_model_ds,iter_step2,track,data_types, ...
                      'segment_smooth_file',segment_file,'intersect_smooth_file',intersect_file,'fault',fault_file, ...
                      'lonc',lonc,'latc',latc,'ref_lon',ref_lon,'ramp',ramp_choice);
 show_slip_model(slip_model,'ref_lon',ref_lon,'lonc', lonc,'latc', latc,'axis_range',[50 150 -180 350 -20 0]);

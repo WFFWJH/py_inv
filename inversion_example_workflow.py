@@ -39,7 +39,7 @@ _FAULT_W_RATIO = 1.1
 _FAULT_L_RATIO = 1.2
 _FAULT_WIDTH = 20e3
 _FAULT_LEN_TOP = 2e3
-_FAULT_LAYERS = 6
+_FAULT_LAYERS = 5
 _OKADA_BACKEND = "numpy"
 _MAX_NFEV = 100
 
@@ -774,8 +774,8 @@ def run_workflow_steps(
 
 if __name__ == "__main__":
     CONFIG_DIR: Optional[Union[str, os.PathLike]] = None
-    START_STEP = 7   # 3 | 5 | 6 | 7  (Step 0/4 始终自动执行)
-    END_STEP = 7
+    START_STEP = 5   # 3 | 5 | 6 | 7  (Step 0/4 始终自动执行)
+    END_STEP = 5
     SKIP_DOWNSAMPLE = True
     OUT_MAT: Optional[str] = None
     OUT_PNG: Optional[str] = None

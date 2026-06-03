@@ -22,7 +22,7 @@
 1
 ##Con
 #strike
-0
+-1
 #dip
 0
 #normal

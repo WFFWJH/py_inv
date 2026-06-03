@@ -2,6 +2,14 @@ __pycache__/
 *.pyc
 .vscode/
 
+# 忽略 input_data 下所有内容
+input_data/*
+
+# 保留 script_downsamp 目录
+!input_data/script_downsamp/
+
+# 保留其所有内容
+!input_data/script_downsamp/**
 # large files
 *.grd
 *.mat

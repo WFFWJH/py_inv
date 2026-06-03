@@ -1,4 +1,4 @@
-function [slip_model,RMS_misfit,model_roughness,return_var] = make_fault_from_insar1(slip_model_vs,slip_model_ds,iter_step,tracks,varargin)
+function [slip_model,RMS_misfit,model_roughness,return_var] = make_fault_from_insar1(slip_model_vs,slip_model_ds,iter_step,tracks,data_type,varargin)
 % Build the finite fault model using fault trace derived from both offsets and seismicity data
 % return the variance reduction between the model and data
 % Started by Zeyu Jin on 07/15/2019
@@ -93,19 +93,15 @@ bd    = cell(numel(tracks),1);
 labels_tracks = zeros(numel(tracks),1);
 for i = 1:numel(tracks)
     fname = [ tracks{i}, '/los_samp', num2str(iint), '.mat'];
-    if strcmp(tracks{i}(end-2:end), 'AZI')
-        type = 'AZO';
-    else
-        type = 'insar';
-    end
+    type = data_type{i};
     [G_raw{i}, G{i}, bd_raw{i}, bd{i}] = build_green_function( ...
         slip_model, fname, type, ramp_choice, model_type);
-    if strcmp(tracks{i}(end-2:end), 'AZI')
+    if strcmp(type, 'AZO')
         G_raw{i}  = G_raw{i}  * beta;
         G{i}      = G{i}      * beta;
         bd_raw{i} = bd_raw{i} * beta;
         bd{i}     = bd{i}     * beta;
-    elseif strcmp(tracks{i}(end-2:end), 'LOS')
+    elseif strcmp(type, 'insar')
         G_raw{i}  = G_raw{i}  * alpha;
         G{i}      = G{i}      * alpha;
         bd_raw{i} = bd_raw{i} * alpha;
@@ -113,7 +109,7 @@ for i = 1:numel(tracks)
     end
 
         % get track's number
-    tok = regexp(tracks{i}, '/[AD](\d+)/', 'tokens');
+    tok = regexp(tracks{i}, '/[AD](\d+)', 'tokens');
     if ~isempty(tok)
         labels_tracks(i) = str2double(tok{1}{1});   % 拿出第一匹配
     end
@@ -276,14 +272,11 @@ end
 % compute_moment(slip_model,model_type);
 mu = 30e9;
 Apatch = slip_model(:,7).*slip_model(:,8);
-strike_u = slip_model(:,12) ./ 100;     % in meters
-strike_d = slip_model(:,13) ./ 100;
+strike_u = slip_model(:,12) ;     % in meters
+strike_d = slip_model(:,13) ;
 M0 = sum(mu .* sqrt(strike_u.^2 + strike_d.^2) .* Apatch);
 Mw = 2/3*(log10(M0) - 9.1);
-M1 = mu*sqrt(sum(strike_u.*Apatch)^2+sum(strike_d.*Apatch)^2);
-Mw1 = 2/3*(log10(M1) - 9.1);
 fprintf('The moment magnitude is Mw = %f\nM0 = %e\n',Mw,M0);
-fprintf('The moment magnitude is Mw = %f\nM0 = %e\n',Mw1,M1);
 
 return_var = [redu_perc,exitflag,rms(GrF*u-Bdata),Mw,M0/1e20];
     
