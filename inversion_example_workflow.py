@@ -443,7 +443,7 @@ def _show_slip_figure(
             matplotlib.use("Agg")
     elif show_figure:
         print(
-            "show_slip_model(关图继续: SHOW_SLIP_BLOCK=0; 不弹窗: SHOW_SLIP=0) ...",
+            "show_slip_model(默认不阻塞; 若需关窗再继续: SHOW_SLIP_BLOCK=1; 不弹窗: SHOW_SLIP=0) ...",
             flush=True,
         )
     show_slip_model(

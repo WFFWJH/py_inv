@@ -1,4 +1,5 @@
 import math
+from statistics import linear_regression
 from typing import Optional
 
 import numpy as np
@@ -106,6 +107,7 @@ def load_fault_one_plane(
     depth_start=0.0,
     dip: Optional[np.ndarray] = None,
     ref_lon=None,
+    coord_mode="lonlat",
 ):
     lon_eq = lonc
     lat_eq = latc
@@ -127,18 +129,25 @@ def load_fault_one_plane(
     if fault_data.ndim == 1:
         fault_data = fault_data.reshape(1, -1)
     if fault_data.shape[1] < 4:
-        raise ValueError("fault_segment_file must contain at least 4 columns: lon1 lat1 lon2 lat2")
+        raise ValueError("fault_segment_file must contain at least 4 columns")
 
     nflt = fault_data.shape[0]
     if dips.size != nflt:
         raise ValueError(f"'dip' length ({dips.size}) must equal fault segment count ({nflt})")
 
-    xo, yo = _ll2xy(lon_eq, lat_eq, ref_lon)
-    lon_pt = np.concatenate([fault_data[:, 0], fault_data[:, 2]])
-    lat_pt = np.concatenate([fault_data[:, 1], fault_data[:, 3]])
-    xutm_pt, yutm_pt = _ll2xy(lon_pt, lat_pt, ref_lon)
-    xpt = xutm_pt - xo
-    ypt = yutm_pt - yo
+    if coord_mode == "lonlat":
+        xo, yo = _ll2xy(lon_eq, lat_eq, ref_lon)
+        lon_pt = np.concatenate([fault_data[:, 0], fault_data[:, 2]])
+        lat_pt = np.concatenate([fault_data[:, 1], fault_data[:, 3]])
+        xutm_pt, yutm_pt = _ll2xy(lon_pt, lat_pt, ref_lon)
+        xpt = xutm_pt - xo
+        ypt = yutm_pt - yo
+    elif coord_mode == "local_xy":
+        # 4 columns: x1 y1 x2 y2 (m), relative to the same origin as InSAR / slip_model.
+        xpt = np.concatenate([fault_data[:, 0], fault_data[:, 2]])
+        ypt = np.concatenate([fault_data[:, 1], fault_data[:, 3]])
+    else:
+        raise ValueError("coord_mode must be 'lonlat' or 'local_xy'")
 
     wp_factor = np.array([bias_wp ** k for k in range(n_layer)], dtype=np.float64)
     wp_top = W / np.sum(wp_factor)
@@ -221,15 +230,57 @@ def load_fault_one_plane(
 
 if __name__ == "__main__":
     import os
-    fault_file = os.path.join(os.path.dirname(__file__), "fault_trace.txt")
-    slip_model = load_fault_one_plane(fault_file,dip=[60,60,60,70],
+    fault_file = os.path.join(os.path.dirname(__file__), "checkerboard.txt")
+
+    width = 20e3
+    length = 50e3
+    len_top = 4e3
+    n_layer = int(length/len_top)
+    layers = 5
+
+    slip_model = load_fault_one_plane(fault_file,dip=[80],
     lonc=95.33,
     latc=19.61,
     ref_lon=95,
-    w_ratio=1.2,
-    width=20e3,
-    len_top=2e3,
-    layers=5);
+    l_ratio=1,
+    w_ratio=1,
+    width=width,
+    len_top=len_top,
+    layers=layers,
+    coord_mode="local_xy"
+    );
 
+    slip_matrix = np.zeros((layers, n_layer))
+    one_layer_slip = np.zeros(n_layer)
+    next_layer_slip = np.zeros(n_layer)
+    for i in range(n_layer):
+        if i%2 == 0:
+            one_layer_slip[i] = 1
+            next_layer_slip[i] = 0
+        else:
+            one_layer_slip[i] = 0
+            next_layer_slip[i] = 1
+    for i in range(layers):
+        if i%2 == 0:
+            slip_matrix[i, :] = one_layer_slip
+        else:
+            slip_matrix[i, :] = next_layer_slip
+    for i in range(layers):
+        for j in range(n_layer):
+            slip_model[i*n_layer+j, 11] = slip_matrix[i, j]
 
-    print(slip_model)
+    import matplotlib
+    print("backend =", matplotlib.get_backend())
+    print("SHOW_SLIP =", __import__("os").environ.get("SHOW_SLIP"))
+    from show_slip_model import show_slip_model
+
+    show_slip_model(
+        slip_model,
+        ref_lon=95, lonc=95.33, latc=19.61,
+        axis_range=[0, 20, 0, 100, -20, 0],
+        apply_axis_range=True,
+        out_path="fault_one_plane.png",
+        block=False,  # 立刻返回; 脚本结束前会自动等你关掉图窗
+    )
+    # 后面可以继续写代码; 图窗会一直开着, 直到进程退出前由 show_slip_model 挂起等待
+    print("继续运行 ... (关掉图窗后进程才会结束)", flush=True)
