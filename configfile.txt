@@ -7,7 +7,7 @@
 ./myanmar/D106/LOS/los_clean_detrend.grd
 ##data_list
 #list of InSAR directories that are to be downsampled (Format: this_track, number_of_sampled_points(e.g.,3000))
-detrend.list1
+detrend.list
 ##fault_file
 #file that writes linearized fault segments (Format: lon1 lat1 lon2 lat2, each pair correponds to one fault end)
 fault_trace.txt

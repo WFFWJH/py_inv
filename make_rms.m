@@ -1,12 +1,7 @@
 addpath ./matlab_code/  
 
+
 lambda = 1;
-%     h1 = double(h1);
-%     bdata_sm = bdata_sm';
-% bd_last = bd_last';
-% Bdata = Bdata';
-% u1 = u';
-%%
     % Greens = [G_raw;H*lambda/h1;Wb;Wl;Wr];
     Greens = [G_last;H*lambda/h1;Wb;Wl;Wr];
     % bdata_sm = [bd_last;zeros(h1,1);db;dl;dr];
