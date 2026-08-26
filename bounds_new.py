@@ -9,6 +9,7 @@ import numpy as np
 def bounds_new(NS: int,
                NT: int,
                tSm: Sequence[int],
+               slip_max: float,
                add_col: int,
                Con: Sequence[int]) -> Tuple[np.ndarray, np.ndarray]:
     """Construct lb, ub vectors.
@@ -26,7 +27,6 @@ def bounds_new(NS: int,
     Con : sequence of 3 ints
         Sign constraint [strike, dip, normal]: +1 positivity, -1 negativity, 0 none.
     """
-    slip_max = 10  # 1000 cm
     tSm = np.asarray(tSm, dtype=int)
     Npatch = int(tSm.sum())
 

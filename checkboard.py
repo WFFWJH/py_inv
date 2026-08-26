@@ -169,7 +169,7 @@ if __name__ == "__main__":
     # 后面可以继续写代码; 图窗会一直开着, 直到进程退出前由 show_slip_model 挂起等待
     print("继续运行 ... (关掉图窗后进程才会结束)", flush=True)
 
-    nx, ny = 50, 100  # 点数可改
+    nx, ny = 100, 140  # 点数可改
     x = np.linspace(-50, 50, nx)
     y = np.linspace(-20, 120, ny)
     X, Y = np.meshgrid(x, y)
@@ -234,6 +234,9 @@ if __name__ == "__main__":
     )
     print(f"smooth H: {H.shape}, h1={h1}, lam={lam}")
 
+
+
+# Okada inversion
     Greens = np.vstack([G, H * (lam / max(h1, 1))])
     bdata_sm = np.concatenate([d, np.zeros(H.shape[0], dtype=np.float64)])
 
@@ -242,8 +245,45 @@ if __name__ == "__main__":
     tSm = np.zeros(nflt + 1, dtype=int)
     for i in range(1, nflt + 1):
         tSm[i] = int(np.sum(fault_id == i))
-    lb, ub = bounds_new(nflt, 2, tSm, 0, Con)
+    lb, ub = bounds_new(nflt, 2, tSm, 2, 0, Con)
 
+    res = lsq_linear(
+        np.ascontiguousarray(Greens, dtype=np.float64),
+        np.ascontiguousarray(bdata_sm, dtype=np.float64).ravel(),
+        bounds=(lb, ub),
+        method="trf",
+        tol=1e-12,
+        max_iter=200,
+        verbose=0,
+    )
+    u = res.x
+    print(f"solver: success={res.success}  nit={res.nit}  {res.message}")
+
+    slip_inv = slip_geo.copy()
+    slip_inv[:, 11] = u[:Npatch]
+    slip_inv[:, 12] = u[Npatch:2 * Npatch]
+
+    misfit = G @ u - d
+    rms = float(np.sqrt(np.mean(misfit ** 2)))
+    print(f"data RMS misfit = {rms:.6e} m")
+    print(f"true strike slip  min/max = {true_slip[:, 11].min():.3f} / {true_slip[:, 11].max():.3f}")
+    print(f"inv  strike slip  min/max = {slip_inv[:, 11].min():.3f} / {slip_inv[:, 11].max():.3f}")
+
+    show_slip_model(
+        slip_inv,
+        ref_lon=95, lonc=95.33, latc=19.61,
+        axis_range=[0, 20, 0, 100, -20, 0],
+        apply_axis_range=True,
+        out_path="fault_checkerboard_inv.png",
+        title="checkerboard inverted slip",
+        block=False,
+    )
+
+
+# Comsol inversion
+
+    G_comsol = np.load("Green.npy")
+    Greens = np.vstack([G_comsol, H * (lam / max(h1, 1))])
     res = lsq_linear(
         np.ascontiguousarray(Greens, dtype=np.float64),
         np.ascontiguousarray(bdata_sm, dtype=np.float64).ravel(),

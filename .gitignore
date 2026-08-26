@@ -2,6 +2,8 @@ __pycache__/
 *.pyc
 .vscode/
 
+*.java
+
 # 忽略 input_data 下所有内容
 input_data/*
 
@@ -11,6 +13,8 @@ input_data/*
 # 保留其所有内容
 !input_data/script_downsamp/**
 # large files
+*.npy
+*.mph
 *.grd
 *.mat
 *.SAFE
