@@ -234,7 +234,7 @@ if __name__ == "__main__":
     )
     print(f"smooth H: {H.shape}, h1={h1}, lam={lam}")
 
-
+    # np.save("Green_okada.npy", G)
 
 # Okada inversion
     Greens = np.vstack([G, H * (lam / max(h1, 1))])
@@ -245,7 +245,7 @@ if __name__ == "__main__":
     tSm = np.zeros(nflt + 1, dtype=int)
     for i in range(1, nflt + 1):
         tSm[i] = int(np.sum(fault_id == i))
-    lb, ub = bounds_new(nflt, 2, tSm, 2, 0, Con)
+    lb, ub = bounds_new(nflt, 2, tSm, 1, 0, Con)
 
     res = lsq_linear(
         np.ascontiguousarray(Greens, dtype=np.float64),
@@ -274,7 +274,7 @@ if __name__ == "__main__":
         ref_lon=95, lonc=95.33, latc=19.61,
         axis_range=[0, 20, 0, 100, -20, 0],
         apply_axis_range=True,
-        out_path="fault_checkerboard_inv.png",
+        out_path="fault_checkerboard_inv_okada.png",
         title="checkerboard inverted slip",
         block=False,
     )
@@ -300,7 +300,7 @@ if __name__ == "__main__":
     slip_inv[:, 11] = u[:Npatch]
     slip_inv[:, 12] = u[Npatch:2 * Npatch]
 
-    misfit = G @ u - d
+    misfit = G_comsol @ u - d
     rms = float(np.sqrt(np.mean(misfit ** 2)))
     print(f"data RMS misfit = {rms:.6e} m")
     print(f"true strike slip  min/max = {true_slip[:, 11].min():.3f} / {true_slip[:, 11].max():.3f}")
@@ -311,7 +311,7 @@ if __name__ == "__main__":
         ref_lon=95, lonc=95.33, latc=19.61,
         axis_range=[0, 20, 0, 100, -20, 0],
         apply_axis_range=True,
-        out_path="fault_checkerboard_inv.png",
+        out_path="fault_checkerboard_inv_comsol.png",
         title="checkerboard inverted slip",
         block=False,
     )

@@ -34,8 +34,12 @@ from show_slip_model import show_slip_model
 
 
 import mph
-i=0
-j=0
+
+
+i=1
+j=1
+fault_type = 2 # 1:strike slip, 2:dip slip
+
 index_patch = i*n_layer+j
 assert slip_model[index_patch, 1]  == index_patch + 1, f"index_patch = {index_patch}, slip_model[index_patch, 1] = {slip_model[index_patch, 1]}"
 assert slip_model[index_patch, 2] == i + 1, f"index_patch = {index_patch}, slip_model[index_patch, 2] = {slip_model[index_patch, 2]}"
@@ -64,9 +68,9 @@ show_slip_model(
 )
 
 from checkboard import _xy2xy
-nx, ny = 100, 100  # 点数可改
-x = np.linspace(-20, 20, nx)
-y = np.linspace(-20, 20, ny)
+nx, ny = 100, 140  # 点数可改
+x = np.linspace(-50, 50, nx)
+y = np.linspace(-20, 120, ny)
 X, Y = np.meshgrid(x, y)
 
 xe = X.ravel() * 1000.0  # km -> m
@@ -100,7 +104,7 @@ yyo = float(slip_model[index_patch,4] + dy)
 xpt = data_insar[:, 0] - xxo
 ypt = data_insar[:, 1] - yyo
 u1=1
-ue1, un1, uz1 = calc_okada(HF, u1, xpt, ypt, nu, delta, d, L, W, 1, strike_k, tp, backend="auto")
+ue1, un1, uz1 = calc_okada(HF, u1, xpt, ypt, nu, delta, d, L, W, fault_type, strike_k, tp, backend="auto")
 
 
 data1 = np.array([xe,yn,np.zeros(nobs)])
@@ -119,10 +123,16 @@ model.component("comp1").geom("geom1").feature("wp2").geom().feature("r1").set("
 print(f"r1'size = {L}, {W}")
 model.component("comp1").geom("geom1").feature("wp2").geom().feature("r1").set("pos", [str(L*j),str(W*i)])
 print(f"r1'pos = {L*(j)}, {W*i}")
-model.component("comp1").physics("solid").feature("disp1").set("Direction", [["free"], ["prescribed"], ["free"]]);
-model.component("comp1").physics("solid").feature("disp1").set("U0", [[0],[0.5],[0]])
-model.component("comp1").physics("solid").feature("disp2").set("Direction", [["free"], ["prescribed"], ["free"]]);
-model.component("comp1").physics("solid").feature("disp2").set("U0", [[0],[0.5],[0]])
+if fault_type == 1:
+    model.component("comp1").physics("solid").feature("disp1").set("Direction", [["free"], ["prescribed"], ["free"]]);
+    model.component("comp1").physics("solid").feature("disp1").set("U0", [[0],[0.5],[0]])
+    model.component("comp1").physics("solid").feature("disp2").set("Direction", [["free"], ["prescribed"], ["free"]]);
+    model.component("comp1").physics("solid").feature("disp2").set("U0", [[0],[0.5],[0]])
+else:
+    model.component("comp1").physics("solid").feature("disp1").set("Direction", [["prescribed"], ["free"], ["free"]]);
+    model.component("comp1").physics("solid").feature("disp1").set("U0", [[-0.5],[0],[0]])
+    model.component("comp1").physics("solid").feature("disp2").set("Direction", [["prescribed"], ["free"], ["free"]]);
+    model.component("comp1").physics("solid").feature("disp2").set("U0", [[0.5],[0],[0]])
 model.sol("sol1").runAll();
 interp = model.result().numerical("uvw")
 interp.setInterpolationCoordinates(data1)
