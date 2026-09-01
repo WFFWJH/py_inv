@@ -16,6 +16,10 @@ Green 函数对比可视化工具
     - 使用 pcolormesh 代替 scatter（规则网格上快一个数量级以上）
     - 切换 patch 时仅更新数据数组，不重建图形对象
     - colorbar 用 FixedLocator/FixedFormatter 固定极值刻度
+
+缩放:
+    - 9 个子图共享 x/y 轴；工具栏放大任一格，其余同步（不重算）
+    - 按 r 恢复全图范围
 """
 
 import numpy as np
@@ -28,18 +32,29 @@ from matplotlib.widgets import Button, TextBox
 # =============================================================================
 width = 20e3       # 断层宽度 (m)
 length = 100e3     # 断层长度 (m)
-len_top = 4e3      # 顶层 patch 长度 (m)
+# len_top = 4e3      # 顶层 patch 长度 (m)
+# layers = 5
+len_top = 10e3      # 顶层 patch 长度 (m)
+layers = 2
 n_layer = int(length / len_top)
-layers = 5
+
 
 # =============================================================================
 # 观测网格：在规则经纬网格上采样，用于将 Green 矩阵还原为 2D 场
 # =============================================================================
-nx, ny = 100, 140  # x、y 方向格点数，可酌情修改
-x = np.linspace(-50, 50, nx)      # x 坐标 (km)
-y = np.linspace(-20, 120, ny)     # y 坐标 (km)
-X, Y = np.meshgrid(x, y)          # 2D 网格，shape = (ny, nx)
-
+# nx, ny = 100, 140  # x、y 方向格点数，可酌情修改
+# x = np.linspace(-50, 50, nx)      # x 坐标 (km)
+# y = np.linspace(-20, 120, ny)     # y 坐标 (km)
+# X, Y = np.meshgrid(x, y)          # 2D 网格，shape = (ny, nx)
+ny = 700
+x = np.unique(np.concatenate([
+    np.linspace(-50, -20, 50),
+    np.linspace(-20, 20, 200),
+    np.linspace(20, 50, 50),
+]))
+y = np.linspace(-20, 120, ny)
+X, Y = np.meshgrid(x, y)
+nx = x.size
 nobs = nx * ny  # 总观测点数，Green 矩阵每个分量占 nobs 行
 
 # =============================================================================
@@ -90,8 +105,46 @@ suptitle_artist = None             # 顶部总标题（仅显示一次 patch 编
 # bottom 留出空间给底部交互控件；top 留出空间给 suptitle
 # =============================================================================
 fig = plt.figure(figsize=PLOT["figsize"])
-axes = fig.subplots(3, 3)
+axes = fig.subplots(3, 3, sharex=True, sharey=True)
 fig.subplots_adjust(bottom=0.12, top=0.93, wspace=0.25, hspace=0.30)
+
+# 数据轴（不含 colorbar / 底部控件）；缩放后同步视野，无需重算
+COMPARE_AXES = list(axes.flat)
+_SYNCING_VIEW = False
+FULL_XLIM = (float(x.min()), float(x.max()))
+FULL_YLIM = (float(y.min()), float(y.max()))
+
+
+def _apply_view(xlim, ylim):
+    """把 (xlim, ylim) 应用到全部 9 个数据轴。"""
+    global _SYNCING_VIEW
+    if _SYNCING_VIEW:
+        return
+    _SYNCING_VIEW = True
+    try:
+        for ax in COMPARE_AXES:
+            ax.set_xlim(xlim)
+            ax.set_ylim(ylim)
+        fig.canvas.draw_idle()
+    finally:
+        _SYNCING_VIEW = False
+
+
+def _bind_view_sync():
+    """任一子图缩放后同步其余子图。按 r 恢复全局范围。"""
+    def on_lim(_ax):
+        if _SYNCING_VIEW or _ax not in COMPARE_AXES:
+            return
+        _apply_view(_ax.get_xlim(), _ax.get_ylim())
+
+    def on_key(event):
+        if event.key == "r":
+            _apply_view(FULL_XLIM, FULL_YLIM)
+
+    for ax in COMPARE_AXES:
+        ax.callbacks.connect("xlim_changed", on_lim)
+        ax.callbacks.connect("ylim_changed", on_lim)
+    fig.canvas.mpl_connect("key_press_event", on_key)
 
 # =============================================================================
 # 底部交互控件（坐标为 figure 归一化坐标 [left, bottom, width, height]）
@@ -474,5 +527,7 @@ btn_next.on_clicked(next_patch)
 btn_mode.on_clicked(toggle_cbar_mode)
 
 _init_axes()   # 创建 pcolormesh 与 colorbar（仅一次）
+_bind_view_sync()
 redraw()       # 绘制初始 patch
+print("缩放: 工具栏放大任一侧栏即可，9 格视野同步。按 r 恢复全图。")
 plt.show()

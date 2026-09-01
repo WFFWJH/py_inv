@@ -118,10 +118,11 @@ if __name__ == "__main__":
 
     width = 20e3
     length = 100e3
-    len_top = 4e3
+    # len_top = 4e3
+    # layers = 5
+    len_top = 10e3
+    layers = 2
     n_layer = int(length/len_top)
-    layers = 5
-
     slip_model = load_fault_one_plane(fault_file,dip=[80],
     lonc=95.33,
     latc=19.61,
@@ -169,8 +170,14 @@ if __name__ == "__main__":
     # 后面可以继续写代码; 图窗会一直开着, 直到进程退出前由 show_slip_model 挂起等待
     print("继续运行 ... (关掉图窗后进程才会结束)", flush=True)
 
-    nx, ny = 100, 140  # 点数可改
-    x = np.linspace(-50, 50, nx)
+    # nx, ny = 100, 140  # 点数可改
+    # x = np.linspace(-50, 50, nx)
+    ny = 700
+    x = np.unique(np.concatenate([
+        np.linspace(-50, -20, 50),
+        np.linspace(-20, 20, 200),
+        np.linspace(20, 50, 50),
+    ]))
     y = np.linspace(-20, 120, ny)
     X, Y = np.meshgrid(x, y)
 
@@ -210,6 +217,7 @@ if __name__ == "__main__":
     G = _build_green_patch_loop(slip_model, data_insar, nu=0.25, backend="auto")
     # d = [ue; un; uz], 与 G 行顺序一致 (长度 3*Nobs)
     d = np.concatenate([data_insar[:, 2], data_insar[:, 3], data_insar[:, 4]])
+    assert np.allclose(d, G @ np.hstack((slip_model[:,11], slip_model[:,12])))
     print("G, d:", G.shape, d.shape)
 
     # ------------------------------------------------------------------
@@ -234,7 +242,7 @@ if __name__ == "__main__":
     )
     print(f"smooth H: {H.shape}, h1={h1}, lam={lam}")
 
-    # np.save("Green_okada.npy", G)
+    np.save("Green_okada.npy", G)
 
 # Okada inversion
     Greens = np.vstack([G, H * (lam / max(h1, 1))])
@@ -245,7 +253,7 @@ if __name__ == "__main__":
     tSm = np.zeros(nflt + 1, dtype=int)
     for i in range(1, nflt + 1):
         tSm[i] = int(np.sum(fault_id == i))
-    lb, ub = bounds_new(nflt, 2, tSm, 1, 0, Con)
+    lb, ub = bounds_new(nflt, 2, tSm, 2, 0, Con)
 
     res = lsq_linear(
         np.ascontiguousarray(Greens, dtype=np.float64),
@@ -282,7 +290,7 @@ if __name__ == "__main__":
 
 # Comsol inversion
 
-    G_comsol = np.load("Green.npy")
+    G_comsol = np.load("Green_comsol.npy")
     Greens = np.vstack([G_comsol, H * (lam / max(h1, 1))])
     res = lsq_linear(
         np.ascontiguousarray(Greens, dtype=np.float64),
