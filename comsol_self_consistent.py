@@ -10,25 +10,15 @@ from bounds_new import bounds_new
 from show_slip_model import show_slip_model
 
 
-fault_file = os.path.join(os.path.dirname(__file__), "checkerboard.txt")
-
-width = 20e3
-length = 100e3
-# len_top = 4e3
-# layers = 5
-len_top = 10e3
-layers = 2
-n_layer = int(length/len_top)
-slip_model = load_fault_one_plane(fault_file,dip=[80],
-lonc=95.33,
-latc=19.61,
-ref_lon=95,
-l_ratio=1,
-w_ratio=1,
+from paragram import fault_file,ref,width,len_top,layers,n_layer,dip,l_ratio,w_ratio,axis_range
+slip_model = load_fault_one_plane(fault_file,dip=dip,
+**ref,
+l_ratio=l_ratio,
+w_ratio=w_ratio,
 width=width,
 len_top=len_top,
 layers=layers,
-coord_mode="local_xy"
+coord_mode="local_xy",
 );
 
 slip_matrix = np.zeros((layers, n_layer))
@@ -122,8 +112,8 @@ print("RMS =", np.sqrt(np.mean(misfit**2)))
 
 show_slip_model(
     slip_model,
-    ref_lon=95, lonc=95.33, latc=19.61,
-    axis_range=[0, 20, 0, 100, -20, 0],
+    **ref,
+    axis_range=axis_range,
     apply_axis_range=True,
     out_path="fault_checkerboard_inv_okada.png",
     title="checkerboard inverted slip",

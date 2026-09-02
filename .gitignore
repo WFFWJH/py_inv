@@ -15,6 +15,7 @@ input_data/*
 # large files
 *.npy
 *.mph
+*.mph.lock
 *.grd
 *.mat
 *.SAFE

@@ -114,45 +114,27 @@ def calc_insar_patches_contrib_okada(
 
 
 if __name__ == "__main__":
-    fault_file = os.path.join(os.path.dirname(__file__), "checkerboard.txt")
+    from paragram import fault_file,ref,width,len_top,layers,l_ratio,w_ratio,dip,slip_matrix,axis_range,xe,yn
 
-    width = 20e3
-    length = 100e3
-    # len_top = 4e3
-    # layers = 5
-    len_top = 10e3
-    layers = 2
-    n_layer = int(length/len_top)
-    slip_model = load_fault_one_plane(fault_file,dip=[80],
-    lonc=95.33,
-    latc=19.61,
-    ref_lon=95,
-    l_ratio=1,
-    w_ratio=1,
+    # width = 20e3
+    # length = 100e3
+    # # len_top = 4e3
+    # # layers = 5
+    # len_top = 10e3
+    # layers = 2
+    # n_layer = int(length/len_top)
+    slip_model = load_fault_one_plane(fault_file,dip=dip,
+    **ref,
+    l_ratio=l_ratio,
+    w_ratio=w_ratio,
     width=width,
     len_top=len_top,
     layers=layers,
     coord_mode="local_xy"
     );
 
-    slip_matrix = np.zeros((layers, n_layer))
-    one_layer_slip = np.zeros(n_layer)
-    next_layer_slip = np.zeros(n_layer)
-    for i in range(n_layer):
-        if i%2 == 0:
-            one_layer_slip[i] = 1
-            next_layer_slip[i] = 0
-        else:
-            one_layer_slip[i] = 0
-            next_layer_slip[i] = 1
-    for i in range(layers):
-        if i%2 == 0:
-            slip_matrix[i, :] = one_layer_slip
-        else:
-            slip_matrix[i, :] = next_layer_slip
-    for i in range(layers):
-        for j in range(n_layer):
-            slip_model[i*n_layer+j, 11] = slip_matrix[i, j]
+
+    slip_model[:, 11] = slip_matrix.ravel()
 
     import matplotlib
     print("backend =", matplotlib.get_backend())
@@ -161,8 +143,8 @@ if __name__ == "__main__":
 
     show_slip_model(
         slip_model,
-        ref_lon=95, lonc=95.33, latc=19.61,
-        axis_range=[0, 20, 0, 100, -20, 0],
+        **ref,
+        axis_range=axis_range,
         apply_axis_range=True,
         out_path="fault_one_plane.png",
         block=False,  # 立刻返回; 脚本结束前会自动等你关掉图窗
@@ -170,20 +152,7 @@ if __name__ == "__main__":
     # 后面可以继续写代码; 图窗会一直开着, 直到进程退出前由 show_slip_model 挂起等待
     print("继续运行 ... (关掉图窗后进程才会结束)", flush=True)
 
-    # nx, ny = 100, 140  # 点数可改
-    # x = np.linspace(-50, 50, nx)
-    ny = 700
-    x = np.unique(np.concatenate([
-        np.linspace(-50, -20, 50),
-        np.linspace(-20, 20, 200),
-        np.linspace(20, 50, 50),
-    ]))
-    y = np.linspace(-20, 120, ny)
-    X, Y = np.meshgrid(x, y)
 
-    xe = X.ravel() * 1000.0  # km -> m
-    yn = Y.ravel() * 1000.0
-    # 五列: x, y, ue, un, uz (位移初值为 0, 由 Okada 前向填充)
     nobs = xe.size
     data_insar = np.column_stack([
         xe,
@@ -279,8 +248,8 @@ if __name__ == "__main__":
 
     show_slip_model(
         slip_inv,
-        ref_lon=95, lonc=95.33, latc=19.61,
-        axis_range=[0, 20, 0, 100, -20, 0],
+        **ref,
+        axis_range=axis_range,
         apply_axis_range=True,
         out_path="fault_checkerboard_inv_okada.png",
         title="checkerboard inverted slip",
@@ -304,7 +273,7 @@ if __name__ == "__main__":
     u = res.x
     print(f"solver: success={res.success}  nit={res.nit}  {res.message}")
 
-    slip_inv = slip_geo.copy()
+
     slip_inv[:, 11] = u[:Npatch]
     slip_inv[:, 12] = u[Npatch:2 * Npatch]
 
@@ -316,11 +285,54 @@ if __name__ == "__main__":
 
     show_slip_model(
         slip_inv,
-        ref_lon=95, lonc=95.33, latc=19.61,
-        axis_range=[0, 20, 0, 100, -20, 0],
+        **ref,
+        axis_range=axis_range,
         apply_axis_range=True,
         out_path="fault_checkerboard_inv_comsol.png",
         title="checkerboard inverted slip",
         block=False,
     )
     print("继续运行 ... (关掉图窗后进程才会结束)", flush=True)
+
+    u_true = np.hstack((true_slip[:,11], true_slip[:,12]))
+
+    r = G_comsol @ u_true - d
+
+    print("TEST 1 true slip")
+    print("RMS =", np.sqrt(np.mean(r**2)))
+
+    Nobs = data_insar.shape[0]
+    Npatch = true_slip.shape[0]
+
+    for i in range(Npatch):
+
+        # strike = 1
+        u = np.zeros(2 * Npatch)
+        u[i] = 1.0
+
+        d_ok = G @ u
+        d_co = G_comsol @ u
+
+        err = d_co - d_ok
+
+        print(
+            f"patch {i:02d} strike: "
+            f"RMS={np.sqrt(np.mean(err**2)):.6e}, "
+            f"max={np.max(np.abs(err)):.6e}"
+        )
+    for i in range(Npatch):
+
+        u = np.zeros(2 * Npatch)
+        u[Npatch + i] = 1.0
+
+        d_ok = G @ u
+        d_co = G_comsol @ u
+
+        err = d_co - d_ok
+
+        print(
+            f"patch {i:02d} dip: "
+            f"RMS={np.sqrt(np.mean(err**2)):.6e}, "
+            f"max={np.max(np.abs(err)):.6e}"
+        )
+    exit()

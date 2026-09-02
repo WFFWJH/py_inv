@@ -6,38 +6,13 @@ import matplotlib.pyplot as plt
 import mph
 import numpy as np
 
-from okada_vs_comsol_copy import NX
-
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from calc_green import _xy2xy
 from calc_okada import calc_okada
 from load_fault_one_plane import load_fault_one_plane
 from show_slip_model import show_slip_model
 
-# ---------------------------------------------------------------------------
-# Config
-# ---------------------------------------------------------------------------
-FAULT_FILE = os.path.join(os.path.dirname(__file__), "checkerboard.txt")
-WIDTH, LENGTH, LEN_TOP, LAYERS = 20e3, 100e3, 4e3, 5
-N_LAYER = int(LENGTH / LEN_TOP)
 
-I, J = 0, 1                          # patch layer / along-strike index
-FAULT_TYPE = 2                       # 1: strike-slip, 2: dip-slip
-NU, U_SLIP = 0.25, 1.0
-
-
-# 每组 (mph_I0, mph_Igt0)：I==0 用前者，否则用后者；每组开一个图窗
-MPH_GROUPS = [
-    ("top0.mph", "top1.mph"),
-    ("top0_infinit.mph","11"),
-    ("top0_tri.mph","11"),
-    ("top0_rec20.mph","11"),
-    ("top0_most_refine.mph","11")
-    # ("meshA0.mph", "meshA1.mph"),
-]
-
-REF = dict(ref_lon=95, lonc=95.33, latc=19.61)
-AXIS_RANGE = [0, 20, 0, 100, -20, 0]
 
 PLOT = dict(
     cmap="jet", figsize=(13, 12), dpi=120, digits=4,
@@ -237,7 +212,7 @@ def plot_source_picker(results, extent):
         3, 3, figsize=PLOT["figsize"], dpi=PLOT["dpi"],
         sharex=True, sharey=True,
     )
-    fig.suptitle("Source picker: A | B | A−B", fontsize=14)
+    # fig.suptitle("Source picker: A | B | A−B", fontsize=14)
 
     images, cbars = [], []
     a_uvw, b_uvw = results[state["a"]], results[state["b"]]
@@ -321,17 +296,35 @@ def plot_source_picker(results, extent):
 # ---------------------------------------------------------------------------
 # Fault geometry & selected patch
 # ---------------------------------------------------------------------------
+from paragram import  n_layer, len_top, layers, width,ref,axis_range,fault_file,l_ratio,w_ratio,dip,x1d_m,y1d_m, xe, yn
+
+I, J = 0, 0                         # patch layer / along-strike index
+FAULT_TYPE = 1                     # 1: strike-slip, 2: dip-slip
+NU, U_SLIP = 0.25, 1.0
+
+
+# 每组 (mph_I0, mph_Igt0)：I==0 用前者，否则用后者；每组开一个图窗
+MPH_GROUPS = [
+    ("top0.mph", "top1.mph"),
+    ("top0_infinit.mph","top1_infinit.mph"),
+    ("top0_tri.mph","11"),
+    ("top0_rec20.mph","11"),
+    ("top0_most_refine.mph","11"),
+    ("top0_most_refine_extend.mph","top1_most_refine_extend.mph")
+    # ("meshA0.mph", "meshA1.mph"),
+]
+
 slip_model = load_fault_one_plane(
-    FAULT_FILE, dip=[80], **REF, l_ratio=1, w_ratio=1,
-    width=WIDTH, len_top=LEN_TOP, layers=LAYERS, coord_mode="local_xy",
+    fault_file, dip=dip, **ref, l_ratio=l_ratio, w_ratio=w_ratio,
+    width=width, len_top=len_top, layers=layers, coord_mode="local_xy",
 )
 
-idx = I * N_LAYER + J
+idx = I * n_layer + J
 assert slip_model[idx, 1] == idx + 1 and slip_model[idx, 2] == I + 1
 slip_model[idx, 11] = 1
 
 show_slip_model(
-    slip_model, **REF, axis_range=AXIS_RANGE, apply_axis_range=True,
+    slip_model, **ref, axis_range=axis_range, apply_axis_range=True,
     out_path="fault_one_plane.png", block=False,
 )
 
@@ -340,22 +333,9 @@ d = max(-zp, 1e-10)
 delta = np.radians(dip_deg)
 strike = np.radians(strike_deg)
 
-# x1d_m = np.linspace(-50, 50, NX) * 1000.0
-# y1d_m = np.linspace(-20, 120, NY) * 1000.0
-# XE, YN = np.meshgrid(x1d_m, y1d_m)  # (NY, NX)
-# xe, yn = XE.ravel(), YN.ravel()
-ny = 700
-x1d_m = np.unique(np.concatenate([
-    np.linspace(-50, -20, 50),
-    np.linspace(-20, 20, 200),
-    np.linspace(20, 50, 50),
-]))
-y1d_m = np.linspace(-20, 120, ny)
-X, Y = np.meshgrid(x1d_m, y1d_m)
+
 NX = x1d_m.size
 NY = y1d_m.size
-xe = X.ravel() * 1000.0  # km -> m
-yn = Y.ravel() * 1000.0
 nobs = xe.size
 coords = np.array([xe, yn, np.zeros(nobs)])
 grid_shape = (NY, NX)

@@ -1,27 +1,9 @@
 import mph
 import numpy as np
 import time
-# model.component("comp1").physics("solid").feature("disp1").set("U0", new double[][]{{0}, {-0.5}, {0}});
-# model.component("comp1").physics("solid").feature("disp2").set("U0", new double[][]{{0}, {0.5}, {0}});
-# model.component("comp1").geom("geom1").feature("wp2").geom().feature("r1").set("pos", new String[]{"4e3", "0"});
-# U1 = model.component("comp1").physics("solid").feature("disp1").getStringArray("U0")
-# print(list(U1))
 
-# model.sol("sol1").runAll();
+from paragram import xe, yn, n_patch, n_layer, len_top, wid_top, layers, top0_model, top1_model
 
-
-# build data: x 近断层加密（-20~20 km 共 200 点），两侧约 1 km 间距
-ny = 700
-x = np.unique(np.concatenate([
-    np.linspace(-50, -20, 50),
-    np.linspace(-20, 20, 200),
-    np.linspace(20, 50, 50),
-]))
-y = np.linspace(-20, 120, ny)
-X, Y = np.meshgrid(x, y)
-
-xe = X.ravel() * 1000.0  # km -> m
-yn = Y.ravel() * 1000.0
 nobs = xe.size
 data_coord = np.column_stack([
     xe,
@@ -29,25 +11,14 @@ data_coord = np.column_stack([
     np.zeros(nobs),  #z
 ])
 
-
 data1 = np.array([xe,yn,np.zeros(nobs)])
 
-width = 20e3
-length = 100e3
-# len_top = 4e3
-# layers = 5
-len_top = 10e3
-layers = 2
-n_layer = int(length/len_top)
-wid_top = float(width/layers)
-n_patch = n_layer*layers
-Green = np.zeros((nobs*3,n_patch*2))
-# np.empty
+Green = np.empty((nobs*3,n_patch*2))
 
 start = time.perf_counter()
 
 client = mph.start()
-model_java = client.load("top0_infinit.mph")
+model_java = client.load(top0_model)
 
 model = model_java.java
 
@@ -82,7 +53,6 @@ for i in range(0,1):
         interp.setInterpolationCoordinates(data1)
         interp.set("expr",["u","v","w"])
         result = model.result().numerical("uvw").getData()
-        model_java.save("dip")
         result_np = np.asarray(result)
         result_u = result_np[0,0,:]
         result_v = result_np[1,0,:]
@@ -95,7 +65,7 @@ top_time = time.perf_counter()
 client.remove(model_java)
 del model
 client.clear()
-model_java = client.load("top1_infinit.mph")
+model_java = client.load(top1_model)
 
 model = model_java.java
 model.result().numerical().remove("uvw")
@@ -130,7 +100,6 @@ for i in range(1,layers):
         interp.setInterpolationCoordinates(data1)
         interp.set("expr",["u","v","w"])
         result = model.result().numerical("uvw").getData()
-        model_java.save("dip")
         result_np = np.asarray(result)
         result_u = result_np[0,0,:]
         result_v = result_np[1,0,:]

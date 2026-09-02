@@ -27,34 +27,9 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import FixedFormatter, FixedLocator
 from matplotlib.widgets import Button, TextBox
 
-# =============================================================================
-# 断层几何参数（与 Green 函数计算时保持一致，此处仅作记录）
-# =============================================================================
-width = 20e3       # 断层宽度 (m)
-length = 100e3     # 断层长度 (m)
-# len_top = 4e3      # 顶层 patch 长度 (m)
-# layers = 5
-len_top = 10e3      # 顶层 patch 长度 (m)
-layers = 2
-n_layer = int(length / len_top)
-
-
-# =============================================================================
-# 观测网格：在规则经纬网格上采样，用于将 Green 矩阵还原为 2D 场
-# =============================================================================
-# nx, ny = 100, 140  # x、y 方向格点数，可酌情修改
-# x = np.linspace(-50, 50, nx)      # x 坐标 (km)
-# y = np.linspace(-20, 120, ny)     # y 坐标 (km)
-# X, Y = np.meshgrid(x, y)          # 2D 网格，shape = (ny, nx)
-ny = 700
-x = np.unique(np.concatenate([
-    np.linspace(-50, -20, 50),
-    np.linspace(-20, 20, 200),
-    np.linspace(20, 50, 50),
-]))
-y = np.linspace(-20, 120, ny)
-X, Y = np.meshgrid(x, y)
-nx = x.size
+from paragram import X,Y,x1d_m, y1d_m
+nx = x1d_m.size
+ny = y1d_m.size
 nobs = nx * ny  # 总观测点数，Green 矩阵每个分量占 nobs 行
 
 # =============================================================================
@@ -88,7 +63,7 @@ DIRECTIONS = ("ue", "un", "uz")
 COLUMNS = (
     {"title": "Okada forward", "cbar_label": "displacement (m)", "symmetric": False},
     {"title": "COMSOL forward", "cbar_label": "displacement (m)", "symmetric": False},
-    {"title": "Error", "cbar_label": "error (m)", "symmetric": True},
+    {"title": "Error", "cbar_label": "error (m)", "symmetric": False},
 )
 
 # =============================================================================
@@ -111,8 +86,8 @@ fig.subplots_adjust(bottom=0.12, top=0.93, wspace=0.25, hspace=0.30)
 # 数据轴（不含 colorbar / 底部控件）；缩放后同步视野，无需重算
 COMPARE_AXES = list(axes.flat)
 _SYNCING_VIEW = False
-FULL_XLIM = (float(x.min()), float(x.max()))
-FULL_YLIM = (float(y.min()), float(y.max()))
+FULL_XLIM = (float(x1d_m.min()), float(x1d_m.max()))
+FULL_YLIM = (float(y1d_m.min()), float(y1d_m.max()))
 
 
 def _apply_view(xlim, ylim):
