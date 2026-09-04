@@ -140,7 +140,8 @@ def _fbi_fast_np(sig, eta, fault_type, q, a, cd, sd, td, sd2, cssd, epsn):
 
 
 if NUMBA_AVAILABLE:
-    @njit(cache=True, fastmath=False, nogil=True)
+    # error_model='numpy': float / 0 -> inf/nan (IEEE), matching NumPy; default 'python' raises.
+    @njit(cache=True, fastmath=False, nogil=True, error_model="numpy")
     def _fbi_scalar(sig, eta, q, a, cd, sd, td, sd2, cssd, epsn, fault_type):
         R = math.sqrt(sig * sig + eta * eta + q * q)
         X = math.sqrt(sig * sig + q * q)
@@ -170,10 +171,12 @@ if NUMBA_AVAILABLE:
             I2 = -a * lnReta - I3
             I1 = -a * 0.5 * (sig * q) / (Rdtil * Rdtil)
         else:
-            den = sig * RX * cd
-            I5 = a * 2.0 / cd * math.atan((eta * (X + q * cd) + X * RX * sd) / den)
+            # Guard before divide: Okada limit I5 -> 0 at xi=sig=0 (same as NumPy post-mask).
             if abs(sig) < epsn:
                 I5 = 0.0
+            else:
+                den = sig * RX * cd
+                I5 = a * 2.0 / cd * math.atan((eta * (X + q * cd) + X * RX * sd) / den)
             I4 = a / cd * (lnRdtil - sd * lnReta)
             I3 = a * (ytil / (cd * Rdtil) - lnReta) + td * I4
             I2 = -a * lnReta - I3
@@ -198,7 +201,7 @@ if NUMBA_AVAILABLE:
             f3 = yqORRsig + cd * (sigqORReta - theta) - I5 * sd2
         return f1, f2, f3
 
-    @njit(cache=True, fastmath=False, nogil=True)
+    @njit(cache=True, fastmath=False, nogil=True, error_model="numpy")
     def _calc_okada_numba(HF, U, x_arr, y_arr, nu, delta, d, length, W, fault_type, strike, tp_arr):
         n = x_arr.size
         ux = np.empty(n, dtype=np.float64)

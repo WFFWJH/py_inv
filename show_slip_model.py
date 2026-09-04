@@ -203,6 +203,8 @@ def show_slip_model(
     out_path: Optional[Union[str, os.PathLike]] = None,
     show: bool = True,
     block: Optional[bool] = None,
+    show_slip_arrows: bool = True,
+    slip_arrow_toggle: bool = True,
 ) -> Any:
     """绘制 3D 断面块体 + 滑移箭矢; 可选震中、地震目录与断层迹线.
 
@@ -212,6 +214,11 @@ def show_slip_model(
         须配合 apply_axis_range=True 才生效.
     apply_axis_range
         True 时使用 axis_range; False(默认) 由数据自动定范围.
+    show_slip_arrows
+        Initial visibility of slip-direction arrows (center origin, strike+dip vector,
+        length scaled to plot size by slip magnitude).
+    slip_arrow_toggle
+        If True, add a Show/Hide Arrows button in interactive windows.
     """
     import matplotlib
 
@@ -297,20 +304,17 @@ def show_slip_model(
         from matplotlib import cm
         cmap = cm.get_cmap("jet")
 
+    # Semi-transparent faces when arrows are on: mplot3d has no z-buffer, so opaque
+    # coplanar patches hide in-plane slip arrows.
+    face_alpha = 0.72 if show_slip_arrows else 1.0
     coll = Poly3DCollection(
         polys,
         facecolors=[cmap(normc(cvals[i])) for i in range(n)],
         edgecolors="k",
         linewidths=0.1,
-        alpha=1.0,
+        alpha=face_alpha,
     )
     ax.add_collection3d(coll)
-
-    if np.any(np.abs(xv) + np.abs(yv) + np.abs(zv) > 1e-30):
-        ax.quiver(
-            xo, yo, zo, xv / slipmax, yv / slipmax, zv / slipmax,
-            length=1.5, normalize=True, color="k", linewidth=0.5, arrow_length_ratio=0.15,
-        )
 
     cb = fig.colorbar(ScalarMappable(cmap=cmap, norm=normc), ax=ax, shrink=0.5, aspect=20)
     cb.set_label("slip (m)")
@@ -374,6 +378,120 @@ def show_slip_model(
         plt.tight_layout()
     except Exception:
         pass
+
+    # Slip arrows: center origin, strike+dip direction, length ~ (slip/slipmax)*plot size.
+    # mplot3d has no z-buffer: use lifted arrows + Line3DCollection + triangular heads
+    # (Poly3DCollection) so they depth-sort with fault faces. Batched quiver3 is unreliable.
+    from mpl_toolkits.mplot3d.art3d import Line3DCollection
+
+    slip_artists: List[Any] = []
+    slip_mask = slip_mag > 1e-30
+    if np.any(slip_mask):
+        xl, yl, zl = ax.get_xlim3d(), ax.get_ylim3d(), ax.get_zlim3d()
+        box_diag = float(np.sqrt((xl[1] - xl[0]) ** 2 + (yl[1] - yl[0]) ** 2 + (zl[1] - zl[0]) ** 2))
+        max_arrow_len = 0.06 * max(box_diag, 1e-9)
+        # lift ~ patch size so arrows sit clearly above the fault plane
+        med_patch = float(np.median(np.minimum(lp, wp))) / 1000.0
+        lift = max(0.35 * med_patch, 0.02 * box_diag)
+        head_frac = 0.32
+        idx = np.flatnonzero(slip_mask)
+
+        shaft_segs: List[np.ndarray] = []
+        head_tris: List[np.ndarray] = []
+        tip_xyz: List[np.ndarray] = []
+
+        for i in idx:
+            corners = polys[int(i)]
+            nvec = np.cross(corners[1] - corners[0], corners[2] - corners[0])
+            nn = float(np.linalg.norm(nvec))
+            nvec = nvec / nn if nn > 1e-15 else np.array([0.0, 0.0, 1.0])
+            if nvec[2] < 0.0:
+                nvec = -nvec
+
+            # xv,yv,zv are in meters (same as slip); scale to km display length
+            raw = np.array([xv[i], yv[i], zv[i]], dtype=np.float64)
+            rlen = float(np.linalg.norm(raw))
+            if rlen < 1e-30:
+                continue
+            vec = raw * (max_arrow_len / slipmax)
+            vlen = float(np.linalg.norm(vec))
+            p0 = np.array([xo[i], yo[i], zo[i]], dtype=np.float64) + lift * nvec
+            p1 = p0 + vec
+            shaft_segs.append(np.vstack([p0, p1]))
+            tip_xyz.append(p1)
+
+            uhat = vec / vlen
+            side = np.cross(uhat, nvec)
+            sn = float(np.linalg.norm(side))
+            if sn < 1e-15:
+                side = np.cross(uhat, np.array([0.0, 0.0, 1.0]))
+                sn = float(np.linalg.norm(side))
+            if sn < 1e-15:
+                continue
+            side = side / sn
+            hlen = head_frac * vlen
+            hwid = 0.5 * hlen
+            left = p1 - hlen * uhat + hwid * side
+            right = p1 - hlen * uhat - hwid * side
+            head_tris.append(np.vstack([p1, left, right]))
+
+        if shaft_segs:
+            lc_bg = Line3DCollection(shaft_segs, colors="#111111", linewidths=4.0)
+            lc_fg = Line3DCollection(shaft_segs, colors="#FFEA00", linewidths=2.4)
+            ax.add_collection3d(lc_bg)
+            ax.add_collection3d(lc_fg)
+            lc_bg.set_visible(show_slip_arrows)
+            lc_fg.set_visible(show_slip_arrows)
+            slip_artists.extend([lc_bg, lc_fg])
+
+        if head_tris:
+            heads = Poly3DCollection(
+                head_tris,
+                facecolors="#FFEA00",
+                edgecolors="#111111",
+                linewidths=1.2,
+                alpha=1.0,
+            )
+            ax.add_collection3d(heads)
+            heads.set_visible(show_slip_arrows)
+            slip_artists.append(heads)
+
+        if tip_xyz:
+            tips = np.asarray(tip_xyz)
+            sc = ax.scatter(
+                tips[:, 0], tips[:, 1], tips[:, 2],
+                c="#FF1744", s=28, depthshade=False, edgecolors="#111111", linewidths=0.4,
+            )
+            sc.set_visible(show_slip_arrows)
+            slip_artists.append(sc)
+
+        if show and slip_arrow_toggle and not _is_headless_backend() and slip_artists:
+            from matplotlib.widgets import Button
+
+            btn_ax = fig.add_axes([0.02, 0.02, 0.16, 0.05])
+            slip_btn = Button(
+                btn_ax,
+                "Hide Arrows" if show_slip_arrows else "Show Arrows",
+                color="#FFF9C4",
+                hovercolor="#FDD835",
+            )
+
+            def _toggle_slip_arrows(_event: Any) -> None:
+                vis = not slip_artists[0].get_visible()
+                for art in slip_artists:
+                    art.set_visible(vis)
+                # restore solid faces when arrows hidden
+                try:
+                    coll.set_alpha(0.72 if vis else 1.0)
+                except Exception:
+                    pass
+                slip_btn.label.set_text("Hide Arrows" if vis else "Show Arrows")
+                fig.canvas.draw_idle()
+
+            slip_btn.on_clicked(_toggle_slip_arrows)
+            fig._slip_arrow_btn = slip_btn
+            fig._slip_arrow_artists = slip_artists
+            fig._slip_face_coll = coll
 
     _finalize_figure(fig, str(out_path) if out_path else None, show, block)
     return fig

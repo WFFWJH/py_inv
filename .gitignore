@@ -1,8 +1,9 @@
 __pycache__/
 *.pyc
 .vscode/
-
+*.txt
 *.java
+fault*.png
 
 # 忽略 input_data 下所有内容
 input_data/*
