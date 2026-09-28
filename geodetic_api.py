@@ -6,7 +6,7 @@
     # 几何
     sm = g.load_fault_one_plane(path, dip=[...], lonc=..., latc=..., ref_lon=...)
     # 反演（单步）或 InversionExample 全流程
-    from inversion_example_workflow import InversionParams, run_okada_inversion, run_workflow_steps, InversionWorkflowState
+    # g.load_workflow_config(); g.run_workflow_steps(...); 或 InversionParams + run_okada_inversion
     ...
 
 依赖仅 ``numpy`` + ``scipy``；``.grd`` 与 ``xarray``、对比脚本与 ``h5py`` 见 requirements.txt 注释行。
@@ -19,6 +19,8 @@ from make_fault_from_insar1 import make_fault_from_insar1
 from inversion_example_workflow import (
     InversionParams,
     InversionWorkflowState,
+    WorkflowConfig,
+    load_workflow_config,
     run_okada_inversion,
     run_workflow_steps,
 )
@@ -31,6 +33,8 @@ __all__ = (
     "calc_okada",
     "load_fault_one_plane",
     "make_fault_from_insar1",
+    "WorkflowConfig",
+    "load_workflow_config",
     "InversionParams",
     "InversionWorkflowState",
     "run_okada_inversion",

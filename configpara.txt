@@ -1,29 +1,45 @@
-#############Configuration File for Geodetic Inversion, For Parameters###############
-##lonf
-#lonf/latf is the coordinate of pixel point
-97
-##latf
-22.74
-##ref_lon
-#central meridian to compute UTM coordinates: This parameter is necessary because UTM coordinates are generally confined within a single UTM zone. If your study area crosses two different UTM zones, it would be complicated to convert to the UTM coordinates at the UTM zone boundary directly. So we shift the central meridian to the west (ref_lon), so that you could define a broader UTM zone than the common one. Usualy choose a ref_lon <= lonc.
-95
-##threshold
-#pixels within 500m would be averaged in order to get the value at that point
-0.5
+############# 数值/反演参数 (按 ##key 读取) ###############
 ##lonc
-#lonc/latc is the coordinate of reference point (0,0)
+# 参考点 (0,0) 经度
 95.33
 ##latc
+# 参考点 (0,0) 纬度
 19.61
+##ref_lon
+# UTM 中央经线, 通常 <= lonc
+95
 ##iter_step
-#The steps during the iterative sampling and inversion (=0: initial step; =1: iterative sampling/inversion)
+# 初次反演迭代标记 (=0 初始)
 0
 ##iter_step2
+# 重采样后二次反演迭代标记
 1
-##Con
-#strike
+##con
+# 约束: strike dip normal
 0
-#dip
 0
-#normal
 0
+##dip
+# 各断层段倾角, 个数须与 fault_file 段数一致
+82 82 82 82
+##ramp_choice
+qu_ramp_7
+##w_ratio
+1.1
+##l_ratio
+1.2
+##width
+# 断层宽度 (m)
+20000
+##len_top
+# 顶部片元长度 (m)
+2000
+##layers
+5
+##default_region
+# data_list 缺省采样框: xmin xmax ymin ymax
+95.0 97.52 15.17 24.05
+##okada_backend
+numpy
+##max_nfev
+100

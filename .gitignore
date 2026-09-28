@@ -7,12 +7,10 @@ fault*.png
 
 # 忽略 input_data 下所有内容
 input_data/*
-
 # 保留 script_downsamp 目录
 !input_data/script_downsamp/
-
-# 保留其所有内容
 !input_data/script_downsamp/**
+input_data/script_downsamp/__pycache__/
 # large files
 *.npy
 *.mph

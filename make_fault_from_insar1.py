@@ -289,7 +289,7 @@ def make_fault_from_insar1(slip_model_vs: np.ndarray,
     NT = 2
     NS = nflt
     total_ramp_cols = add_col * max(n_classes, 1)  # matches expanded Greens width
-    lb, ub = bounds_new(NS, NT, tSm, total_ramp_cols, Con)
+    lb, ub = bounds_new(NS, NT, tSm,10, total_ramp_cols, Con)
 
     # ------------------------------------------------------------------
     # Assemble final system

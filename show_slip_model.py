@@ -203,7 +203,7 @@ def show_slip_model(
     out_path: Optional[Union[str, os.PathLike]] = None,
     show: bool = True,
     block: Optional[bool] = None,
-    show_slip_arrows: bool = True,
+    show_slip_arrows: bool = False,
     slip_arrow_toggle: bool = True,
 ) -> Any:
     """绘制 3D 断面块体 + 滑移箭矢; 可选震中、地震目录与断层迹线.
@@ -295,7 +295,7 @@ def show_slip_model(
     cvals = np.sqrt(slip1 ** 2 + slip2 ** 2)
     cmax = max(float(np.max(cvals)) if n else 1.0, 1e-20)
 
-    fig = plt.figure()
+    fig = plt.figure(figsize=(20, 10), dpi=150)
     ax = fig.add_subplot(111, projection="3d")
     normc = colors.Normalize(vmin=0.0, vmax=cmax)
     try:
@@ -316,8 +316,9 @@ def show_slip_model(
     )
     ax.add_collection3d(coll)
 
-    cb = fig.colorbar(ScalarMappable(cmap=cmap, norm=normc), ax=ax, shrink=0.5, aspect=20)
-    cb.set_label("slip (m)")
+    cb = fig.colorbar(ScalarMappable(cmap=cmap, norm=normc), ax=ax, shrink=0.6, pad=0.08, aspect=18)
+    cb.ax.tick_params(labelsize=8)
+    cb.set_label("slip (m)", fontsize=9)
 
     xs, ys = _ll_to_km(slon, slat, ref_lon, x0_ref, y0_ref)
     ax.scatter([float(xs)], [float(ys)], [sdepth], c="r", s=100, marker="*", edgecolors="k", zorder=5)
@@ -351,10 +352,10 @@ def show_slip_model(
             ax.plot(xsa, ysa, [0.0, 0.0], c="k", linewidth=1.5)
             limit_extras.append((xsa, ysa, np.array([0.0, 0.0])))
 
-    ax.set_xlabel("Easting (km)")
-    ax.set_ylabel("Northing (km)")
-    ax.set_zlabel("Depth (km)")
-    ax.set_title(title)
+    ax.set_xlabel("Easting (km)", fontsize=9)
+    ax.set_ylabel("Northing (km)", fontsize=9)
+    ax.set_zlabel("Depth (km)", fontsize=9)
+    ax.set_title(title, fontsize=10)
     ax.grid(True)
 
     # ----- 坐标轴范围 (改绘图视窗主要改这里) -----
@@ -369,13 +370,14 @@ def show_slip_model(
         ax.set_zlim(axis_range[4], axis_range[5])   # Depth (km), 负值=地下
     else:
         _set_3d_limits(ax, polys, limit_extras)
+    # 保持 XYZ 等比例，但按实际轴长计算比值，避免 z 方向被人为放大。
     try:
         xl, yl, zl = ax.get_xlim3d(), ax.get_ylim3d(), ax.get_zlim3d()
-        ax.set_box_aspect((xl[1] - xl[0] + 1e-9, yl[1] - yl[0] + 1e-9, zl[1] - zl[0] + 1e-9))
+        ax.set_box_aspect((max(xl[1] - xl[0], 1e-9), max(yl[1] - yl[0], 1e-9), max(zl[1] - zl[0], 1e-9)))
     except Exception:
         pass
     try:
-        plt.tight_layout()
+        plt.tight_layout(pad=0.6)
     except Exception:
         pass
 
@@ -389,16 +391,15 @@ def show_slip_model(
     if np.any(slip_mask):
         xl, yl, zl = ax.get_xlim3d(), ax.get_ylim3d(), ax.get_zlim3d()
         box_diag = float(np.sqrt((xl[1] - xl[0]) ** 2 + (yl[1] - yl[0]) ** 2 + (zl[1] - zl[0]) ** 2))
-        max_arrow_len = 0.06 * max(box_diag, 1e-9)
-        # lift ~ patch size so arrows sit clearly above the fault plane
+        max_arrow_len = 0.012 * max(box_diag, 1e-9)
+        # keep arrows very close to the original fault plane; only slightly larger than the patch
         med_patch = float(np.median(np.minimum(lp, wp))) / 1000.0
-        lift = max(0.35 * med_patch, 0.02 * box_diag)
-        head_frac = 0.32
+        lift = max(0.05 * med_patch, 0.004 * box_diag)
+        head_frac = 0.08
         idx = np.flatnonzero(slip_mask)
 
         shaft_segs: List[np.ndarray] = []
         head_tris: List[np.ndarray] = []
-        tip_xyz: List[np.ndarray] = []
 
         for i in idx:
             corners = polys[int(i)]
@@ -418,7 +419,6 @@ def show_slip_model(
             p0 = np.array([xo[i], yo[i], zo[i]], dtype=np.float64) + lift * nvec
             p1 = p0 + vec
             shaft_segs.append(np.vstack([p0, p1]))
-            tip_xyz.append(p1)
 
             uhat = vec / vlen
             side = np.cross(uhat, nvec)
@@ -436,34 +436,22 @@ def show_slip_model(
             head_tris.append(np.vstack([p1, left, right]))
 
         if shaft_segs:
-            lc_bg = Line3DCollection(shaft_segs, colors="#111111", linewidths=4.0)
-            lc_fg = Line3DCollection(shaft_segs, colors="#FFEA00", linewidths=2.4)
-            ax.add_collection3d(lc_bg)
+            lc_fg = Line3DCollection(shaft_segs, colors="#000000", linewidths=0.8, alpha=0.9)
             ax.add_collection3d(lc_fg)
-            lc_bg.set_visible(show_slip_arrows)
             lc_fg.set_visible(show_slip_arrows)
-            slip_artists.extend([lc_bg, lc_fg])
+            slip_artists.append(lc_fg)
 
         if head_tris:
             heads = Poly3DCollection(
                 head_tris,
-                facecolors="#FFEA00",
-                edgecolors="#111111",
-                linewidths=1.2,
-                alpha=1.0,
+                facecolors="#000000",
+                edgecolors="none",
+                linewidths=0.0,
+                alpha=0.9,
             )
             ax.add_collection3d(heads)
             heads.set_visible(show_slip_arrows)
             slip_artists.append(heads)
-
-        if tip_xyz:
-            tips = np.asarray(tip_xyz)
-            sc = ax.scatter(
-                tips[:, 0], tips[:, 1], tips[:, 2],
-                c="#FF1744", s=28, depthshade=False, edgecolors="#111111", linewidths=0.4,
-            )
-            sc.set_visible(show_slip_arrows)
-            slip_artists.append(sc)
 
         if show and slip_arrow_toggle and not _is_headless_backend() and slip_artists:
             from matplotlib.widgets import Button
@@ -506,7 +494,7 @@ if __name__ == "__main__":
     here = os.path.dirname(os.path.abspath(__file__))
 
     # --- 输入 ---
-    slip_path = os.path.join(here, "tests", "inversion", "py_inversion_iint0.mat")
+    slip_path = os.path.join(here, "py_inversion_iint0.mat")
     ref_lon, lonc, latc = 95.0, 95.33, 19.61   # 与反演 configpara 一致, 用于震中/迹线 km 换算
     fault_path = os.path.join(here, "fault_trace.txt")  # 4 列 lon1 lat1 lon2 lat2; 无则 None
     out_png = None  # None -> 与 slip 同目录 *_show.png

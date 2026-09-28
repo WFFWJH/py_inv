@@ -16,8 +16,7 @@ r"""与 ``InversionExample.m`` 主流程对齐(默认至原脚本第 162 行).
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
-from types import SimpleNamespace
+from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
@@ -29,22 +28,10 @@ from make_insar_data import make_insar_data
 from resamp_insar_data import resamp_insar_data
 from show_slip_model import show_slip_model
 
-# 与 InversionExample.m 第 74-75 行一致(未从 config 读取)
-_DIP_ANGLE_DEFAULT: List[float] = [82.0, 82.0, 82.0, 82.0]
-_RAMP_CHOICE = "qu_ramp_7"
-
-# load_fault_one_plane 默认 — 须与重构前 inversion_workflow.InversionParams 一致
-# (MATLAB InversionExample.m 为 w_ratio=1.2, layers=5; 改此处会改变反演结果)
-_FAULT_W_RATIO = 1.1
-_FAULT_L_RATIO = 1.2
-_FAULT_WIDTH = 20e3
-_FAULT_LEN_TOP = 2e3
-_FAULT_LAYERS = 5
-_OKADA_BACKEND = "numpy"
-_MAX_NFEV = 100
-
-# 与 InversionExample.m 第 105-106 行默认采样框一致
-_DEFAULT_REGION: Tuple[float, float, float, float] = (95.0, 97.52, 15.17, 24.05)
+# ---------------------------------------------------------------------------
+# 统一配置: 路径来自 configfile.txt, 数值来自 configpara.txt (均按 ##key 解析)
+# 未在文件中出现的键使用下方 dataclass 默认值.
+# ---------------------------------------------------------------------------
 
 
 def _in_step_range(step: int, lo: int, hi: int) -> bool:
@@ -68,29 +55,58 @@ def _run_required_steps(
 
 
 @dataclass
+class WorkflowConfig:
+    """流程全部可调参数; 由 ``load_workflow_config`` 从两个 txt 合并填充."""
+
+    # --- configfile.txt ---
+    data_list: str = "datav0.list"
+    fault_file: str = "fault_trace.txt"
+    segment_file: str = "seg_connect"
+
+    # --- configpara.txt ---
+    lonc: float = 95.33
+    latc: float = 19.61
+    ref_lon: float = 95.0
+    iter_step: int = 0
+    iter_step2: int = 1
+    con: Tuple[int, int, int] = (0, 0, 0)
+    dip: List[float] = field(default_factory=lambda: [82.0, 82.0, 82.0, 82.0])
+    ramp_choice: str = "qu_ramp_7"
+    w_ratio: float = 1.1
+    l_ratio: float = 1.2
+    width: float = 20e3
+    len_top: float = 2e3
+    layers: int = 5
+    default_region: Tuple[float, float, float, float] = (95.0, 97.52, 15.17, 24.05)
+    okada_backend: str = "numpy"
+    max_nfev: int = 100
+    model_type: str = "okada"
+
+
+@dataclass
 class InversionParams:
-    """单步反演参数容器 (``geodetic_api`` / 脚本一次性调用)."""
+    """单步反演参数容器 (``geodetic_api`` / 脚本一次性调用; 不读 config 文件)."""
 
     track_paths: Sequence[str]
     paths_type: Sequence[str]
     fault_file: str
     seg_connect_file: str
     output_mat: str
-    iter_step: int = 0
-    lonc: float = 95.33
-    latc: float = 19.61
-    ref_lon: float = 95.0
-    ramp_choice: str = _RAMP_CHOICE
-    con: Tuple[int, int, int] = (0, 0, 0)
+    iter_step: int = WorkflowConfig.iter_step
+    lonc: float = WorkflowConfig.lonc
+    latc: float = WorkflowConfig.latc
+    ref_lon: float = WorkflowConfig.ref_lon
+    ramp_choice: str = WorkflowConfig.ramp_choice
+    con: Tuple[int, int, int] = WorkflowConfig.con
     dip_per_segment: Optional[List[float]] = None
-    w_ratio: float = _FAULT_W_RATIO
-    l_ratio: float = _FAULT_L_RATIO
-    width: float = _FAULT_WIDTH
-    len_top: float = _FAULT_LEN_TOP
-    layers: int = _FAULT_LAYERS
-    max_nfev: int = _MAX_NFEV
-    model_type: str = "okada"
-    okada_backend: str = _OKADA_BACKEND
+    w_ratio: float = WorkflowConfig.w_ratio
+    l_ratio: float = WorkflowConfig.l_ratio
+    width: float = WorkflowConfig.width
+    len_top: float = WorkflowConfig.len_top
+    layers: int = WorkflowConfig.layers
+    max_nfev: int = WorkflowConfig.max_nfev
+    model_type: str = WorkflowConfig.model_type
+    okada_backend: str = WorkflowConfig.okada_backend
     save_snapshot: bool = True
 
 
@@ -102,7 +118,7 @@ def _save_inversion_mat(
     ret: np.ndarray,
     extras: Dict[str, Any],
     *,
-    ramp_choice: str = _RAMP_CHOICE,
+    ramp_choice: str = WorkflowConfig.ramp_choice,
 ) -> None:
     savemat(
         out_mat,
@@ -170,93 +186,116 @@ def run_okada_inversion(params: InversionParams) -> Tuple[
     return slip, rms_m, rough, ret, extras
 
 
-def _lines_skip_hash(path: str) -> List[str]:
-    """行内出现 ``#`` 则整行丢弃(与 MATLAB 对含 ``#`` 行跳过类似)."""
-    out: List[str] = []
+def _parse_keyed_txt(path: str) -> Dict[str, List[str]]:
+    """解析 ``##key`` / 值行格式; 以 ``#`` 开头的行视为注释."""
+    sections: Dict[str, List[str]] = {}
+    current: Optional[str] = None
     with open(path, "r", encoding="utf-8", errors="replace") as f:
         for line in f:
-            if "#" in line:
+            raw = line.strip()
+            if not raw:
                 continue
-            s = line.strip()
-            if s:
-                out.append(s)
+            if raw.startswith("##"):
+                current = raw[2:].strip().split()[0].lower()
+                sections.setdefault(current, [])
+                continue
+            if raw.startswith("#") or current is None:
+                continue
+            sections[current].append(raw)
+    return sections
+
+
+def _first_str(sec: Dict[str, List[str]], key: str, default: str) -> str:
+    vals = sec.get(key) or []
+    return vals[0].strip() if vals else default
+
+
+def _floats(sec: Dict[str, List[str]], key: str) -> List[float]:
+    out: List[float] = []
+    for line in sec.get(key) or []:
+        for tok in line.split():
+            out.append(float(tok))
     return out
 
 
-def read_configfile(configfile_path: str) -> SimpleNamespace:
-    """解析 ``configfile.txt``: 6 行路径(无含 ``#`` 行)."""
-    lines = _lines_skip_hash(configfile_path)
-    keys = (
-        "grdin",
-        "grdout",
-        "data_list",
-        "fault_file",
-        "segment_smooth_file",
-        "segment_file",
-    )
-    if len(lines) < 6:
-        raise ValueError(
-            "configfile 需要至少 6 条无注释行(grdin, grdout, data_list, fault, 2x segment), 得到 %d: %s"
-            % (len(lines), configfile_path)
-        )
-    d = {k: lines[i] for i, k in enumerate(keys)}
-    return SimpleNamespace(**d)
+def _optional_float(sec: Dict[str, List[str]], key: str, default: float) -> float:
+    nums = _floats(sec, key)
+    return float(nums[0]) if nums else default
 
 
-@dataclass
-class ConfigPara:
-    """与 ``configpara.txt`` 中数值顺序一致."""
-
-    lonf: float
-    latf: float
-    ref_lon: float
-    threshold: float
-    lonc: float
-    latc: float
-    iter_step: int
-    iter_step2: int
-    con: Tuple[int, int, int]
+def _optional_int(sec: Dict[str, List[str]], key: str, default: int) -> int:
+    nums = _floats(sec, key)
+    return int(nums[0]) if nums else default
 
 
-def read_configpara(configpara_path: str) -> ConfigPara:
-    """前 8 个为原 MATLAB ``para(1)..(8)``; 第 9–11 个为 Con(若缺省为 -1,0,0)."""
-    nums: List[float] = []
-    with open(configpara_path, "r", encoding="utf-8", errors="replace") as f:
-        for line in f:
-            if "#" in line:
-                continue
-            s = line.strip()
-            if not s:
-                continue
-            try:
-                nums.append(float(s))
-            except ValueError:
-                pass
-    if len(nums) < 8:
-        raise ValueError("configpara 中至少需要 8 个数值, 得到 %d: %s" % (len(nums), configpara_path))
-    it0, it1 = int(nums[6]), int(nums[7])
-    con: Tuple[int, int, int]
-    if len(nums) >= 11:
-        con = (int(nums[8]), int(nums[9]), int(nums[10]))
+def load_workflow_config(
+    config_dir: Optional[Union[str, os.PathLike]] = None,
+) -> Tuple[str, WorkflowConfig]:
+    """
+    从目录读取 ``configfile.txt`` + ``configpara.txt``, 合并为 ``WorkflowConfig``.
+
+    返回 ``(root_abs, config)``. 缺文件或缺必需键时抛错; 可选键用 dataclass 默认值.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    root = os.path.abspath(config_dir) if config_dir is not None else here
+    cfile = os.path.join(root, "configfile.txt")
+    pfile = os.path.join(root, "configpara.txt")
+    if not os.path.isfile(cfile) or not os.path.isfile(pfile):
+        raise FileNotFoundError("需要 %s 与 %s" % (cfile, pfile))
+
+    files = _parse_keyed_txt(cfile)
+    paras = _parse_keyed_txt(pfile)
+    base = WorkflowConfig()
+
+    required_files = ("data_list", "fault_file", "segment_file")
+    missing = [k for k in required_files if not (files.get(k))]
+    if missing:
+        raise ValueError("configfile.txt 缺少键或值: %s (%s)" % (", ".join(missing), cfile))
+
+    con_nums = _floats(paras, "con")
+    if len(con_nums) >= 3:
+        con = (int(con_nums[0]), int(con_nums[1]), int(con_nums[2]))
     else:
-        con = (0, 0, 0)
-    return ConfigPara(
-        lonf=nums[0],
-        latf=nums[1],
-        ref_lon=nums[2],
-        threshold=nums[3],
-        lonc=nums[4],
-        latc=nums[5],
-        iter_step=it0,
-        iter_step2=it1,
+        con = base.con
+
+    dip = _floats(paras, "dip") or list(base.dip)
+
+    reg = _floats(paras, "default_region")
+    if len(reg) >= 4:
+        default_region = (reg[0], reg[1], reg[2], reg[3])
+    else:
+        default_region = base.default_region
+
+    cfg = replace(
+        base,
+        data_list=_first_str(files, "data_list", base.data_list),
+        fault_file=_first_str(files, "fault_file", base.fault_file),
+        segment_file=_first_str(files, "segment_file", base.segment_file),
+        lonc=_optional_float(paras, "lonc", base.lonc),
+        latc=_optional_float(paras, "latc", base.latc),
+        ref_lon=_optional_float(paras, "ref_lon", base.ref_lon),
+        iter_step=_optional_int(paras, "iter_step", base.iter_step),
+        iter_step2=_optional_int(paras, "iter_step2", base.iter_step2),
         con=con,
+        dip=[float(x) for x in dip],
+        ramp_choice=_first_str(paras, "ramp_choice", base.ramp_choice),
+        w_ratio=_optional_float(paras, "w_ratio", base.w_ratio),
+        l_ratio=_optional_float(paras, "l_ratio", base.l_ratio),
+        width=_optional_float(paras, "width", base.width),
+        len_top=_optional_float(paras, "len_top", base.len_top),
+        layers=_optional_int(paras, "layers", base.layers),
+        default_region=default_region,
+        okada_backend=_first_str(paras, "okada_backend", base.okada_backend),
+        max_nfev=_optional_int(paras, "max_nfev", base.max_nfev),
+        model_type=_first_str(paras, "model_type", base.model_type),
     )
+    return root, cfg
 
 
 def read_data_list(
     data_list_path: str,
     *,
-    default_region: Tuple[float, float, float, float] = _DEFAULT_REGION,
+    default_region: Tuple[float, float, float, float] = (95.0, 97.52, 15.17, 24.05),
 ) -> Tuple[List[str], List[int], np.ndarray, List[str], np.ndarray, np.ndarray]:
     """
     每行 ``track_path npt [xmin xmax ymin ymax] type``.
@@ -351,8 +390,7 @@ class InversionWorkflowState:
     """全流程中间变量容器; 各 step_* 函数读写此对象."""
 
     root: str = ""
-    cfg: Optional[SimpleNamespace] = None
-    para: Optional[ConfigPara] = None
+    config: Optional[WorkflowConfig] = None
     tracks: List[str] = field(default_factory=list)
     npt: List[int] = field(default_factory=list)
     region: Optional[np.ndarray] = None
@@ -381,9 +419,10 @@ class InversionWorkflowState:
     extras2: Optional[Dict[str, Any]] = None
 
 
-def _require_config(state: InversionWorkflowState) -> None:
-    if state.cfg is None or state.para is None or not state.tracks:
+def _require_config(state: InversionWorkflowState) -> WorkflowConfig:
+    if state.config is None or not state.tracks:
         raise RuntimeError("缺少配置: 请先运行 step_load_config 或从 load_config 步骤开始")
+    return state.config
 
 
 def _los_samp_path(track: str, iint: int) -> str:
@@ -413,13 +452,15 @@ def _ensure_slip(state: InversionWorkflowState, checkpoint_mat: Optional[str] = 
 
 
 def _resolve_output_paths(state: InversionWorkflowState) -> None:
+    cfg = state.config
     if not state.out_mat:
         state.out_mat = os.path.join(state.root, "py_inversion_iint0.mat")
     if not state.out_png:
         state.out_png = os.path.splitext(state.out_mat)[0] + "_show.png"
-    if state.para and not state.out_mat_step2:
-        it2 = int(state.para.iter_step2)
-        state.out_mat_step2 = os.path.join(state.root, "py_inversion_iint%d.mat" % it2)
+    if cfg is not None and not state.out_mat_step2:
+        state.out_mat_step2 = os.path.join(
+            state.root, "py_inversion_iint%d.mat" % int(cfg.iter_step2)
+        )
     if not state.out_png_step2 and state.out_mat_step2:
         state.out_png_step2 = os.path.splitext(state.out_mat_step2)[0] + "_show_step7.png"
 
@@ -432,6 +473,7 @@ def _show_slip_figure(
     *,
     show_figure: bool,
 ) -> None:
+    cfg = _require_config(state)
     do_show = show_figure and os.environ.get("SHOW_SLIP", "1").strip() not in (
         "0", "false", "False", "no",
     )
@@ -448,9 +490,9 @@ def _show_slip_figure(
         )
     show_slip_model(
         slip,
-        ref_lon=state.para.ref_lon,
-        lonc=state.para.lonc,
-        latc=state.para.latc,
+        ref_lon=cfg.ref_lon,
+        lonc=cfg.lonc,
+        latc=cfg.latc,
         fault=state.fault_abs,
         out_path=out_png,
         show=do_show,
@@ -466,20 +508,20 @@ def _ensure_slip_vs(state: InversionWorkflowState) -> None:
 
 def step_load_fault(state: InversionWorkflowState) -> InversionWorkflowState:
     """Step 4: ``load_fault_one_plane`` 构建断层几何."""
-    _require_config(state)
+    cfg = _require_config(state)
     if not state.dangles:
         raise ValueError("dip 角列表为空; 请先 step_load_config")
     state.slip_vs = load_fault_one_plane(
         state.fault_abs,
         dip=state.dangles,
-        lonc=state.para.lonc,
-        latc=state.para.latc,
-        ref_lon=state.para.ref_lon,
-        l_ratio=_FAULT_L_RATIO,
-        w_ratio=_FAULT_W_RATIO,
-        width=_FAULT_WIDTH,
-        len_top=_FAULT_LEN_TOP,
-        layers=_FAULT_LAYERS,
+        lonc=cfg.lonc,
+        latc=cfg.latc,
+        ref_lon=cfg.ref_lon,
+        l_ratio=cfg.l_ratio,
+        w_ratio=cfg.w_ratio,
+        width=cfg.width,
+        len_top=cfg.len_top,
+        layers=cfg.layers,
     )
     print("slip_model_vs shape = %s" % (state.slip_vs.shape,), flush=True)
     return state
@@ -489,22 +531,23 @@ def _run_make_fault(
     state: InversionWorkflowState,
     iter_step: int,
 ) -> Tuple[np.ndarray, float, float, np.ndarray, Dict[str, Any]]:
+    cfg = _require_config(state)
     _ensure_slip_vs(state)
     _check_los_samp_files(state, iter_step)
     return make_fault_from_insar1(
         state.slip_vs, None, int(iter_step), state.tracks,
         paths_type=state.dtypes,
-        ramp_choice=_RAMP_CHOICE,
+        ramp_choice=cfg.ramp_choice,
         segment_smooth_file=state.seg_file_abs,
         intersect_smooth_file=None,
         fault_file=state.fault_abs,
-        ref_lon=state.para.ref_lon,
-        lonc=state.para.lonc,
-        latc=state.para.latc,
-        Con=state.para.con,
-        model_type="okada",
-        backend=_OKADA_BACKEND,
-        max_nfev=_MAX_NFEV,
+        ref_lon=cfg.ref_lon,
+        lonc=cfg.lonc,
+        latc=cfg.latc,
+        Con=cfg.con,
+        model_type=cfg.model_type,
+        backend=cfg.okada_backend,
+        max_nfev=cfg.max_nfev,
         verbose=True,
     )
 
@@ -515,24 +558,18 @@ def step_load_config(
     *,
     dip_per_segment: Optional[Sequence[float]] = None,
 ) -> InversionWorkflowState:
-    """Step 0: 读 config / data_list, 填充 state."""
-    here = os.path.dirname(os.path.abspath(__file__))
-    root = os.path.abspath(config_dir) if config_dir is not None else here
+    """Step 0: 读 configfile/configpara + data_list, 填充 state."""
+    root, cfg = load_workflow_config(config_dir)
     state.root = root
+    state.config = cfg
 
-    cfile = os.path.join(root, "configfile.txt")
-    pfile = os.path.join(root, "configpara.txt")
-    if not os.path.isfile(cfile) or not os.path.isfile(pfile):
-        raise FileNotFoundError("需要 %s 与 %s" % (cfile, pfile))
+    data_list_abs = _resolve_under_root(root, cfg.data_list)
+    state.fault_abs = _resolve_under_root(root, cfg.fault_file)
+    state.seg_file_abs = _resolve_under_root(root, cfg.segment_file)
 
-    state.cfg = read_configfile(cfile)
-    state.para = read_configpara(pfile)
-
-    data_list_abs = _resolve_under_root(root, state.cfg.data_list)
-    state.fault_abs = _resolve_under_root(root, state.cfg.fault_file)
-    state.seg_file_abs = _resolve_under_root(root, state.cfg.segment_file)
-
-    tracks, npt, region, dtypes, nmin, nmax = read_data_list(data_list_abs)
+    tracks, npt, region, dtypes, nmin, nmax = read_data_list(
+        data_list_abs, default_region=cfg.default_region,
+    )
     state.tracks = tracks
     state.npt = npt
     state.region = region
@@ -542,10 +579,10 @@ def step_load_config(
     state.ntrack = len(tracks)
     state.nseg = count_fault_segments(state.fault_abs)
 
-    dangles = list(dip_per_segment) if dip_per_segment is not None else _DIP_ANGLE_DEFAULT
+    dangles = list(dip_per_segment) if dip_per_segment is not None else list(cfg.dip)
     if state.nseg != len(dangles):
         raise ValueError(
-            "fault 段数 %d 与 dip 角个数 %d 不一致; 请改 ``_DIP_ANGLE_DEFAULT`` 或传 dip_per_segment=..."
+            "fault 段数 %d 与 dip 角个数 %d 不一致; 请改 configpara.txt 的 ##dip 或传 dip_per_segment=..."
             % (state.nseg, len(dangles))
         )
     state.dangles = [float(x) for x in dangles]
@@ -570,9 +607,9 @@ def step_downsample(
     save_plot: bool = True,
 ) -> InversionWorkflowState:
     """Step 3: ``make_insar_data`` (quadtree)."""
-    _require_config(state)
+    cfg = _require_config(state)
     if skip:
-        iint = int(state.para.iter_step)
+        iint = int(cfg.iter_step)
         _check_los_samp_files(state, iint)
         print("已跳过 downsample (假定各道已有 los_samp%d.mat)." % iint, flush=True)
         return state
@@ -583,9 +620,9 @@ def step_downsample(
         state.nmin,
         state.nmax,
         method="quadtree",
-        lonc=state.para.lonc,
-        latc=state.para.latc,
-        ref_lon=state.para.ref_lon,
+        lonc=cfg.lonc,
+        latc=cfg.latc,
+        ref_lon=cfg.ref_lon,
         fault_file=state.fault_abs,
         save_mat=True,
         save_plot=save_plot,
@@ -595,9 +632,9 @@ def step_downsample(
 
 def step_invert1(state: InversionWorkflowState) -> InversionWorkflowState:
     """Step 5a: ``make_fault_from_insar1`` (iter_step)."""
-    _require_config(state)
+    cfg = _require_config(state)
     _resolve_output_paths(state)
-    slip, rms, rough, ret, extras = _run_make_fault(state, int(state.para.iter_step))
+    slip, rms, rough, ret, extras = _run_make_fault(state, int(cfg.iter_step))
     state.slip, state.rms, state.rough = slip, rms, rough
     state.ret, state.extras = ret, extras
     return state
@@ -605,12 +642,13 @@ def step_invert1(state: InversionWorkflowState) -> InversionWorkflowState:
 
 def step_save1(state: InversionWorkflowState) -> InversionWorkflowState:
     """Step 5b: 保存第一次反演 ``.mat``."""
-    _require_config(state)
+    cfg = _require_config(state)
     _resolve_output_paths(state)
     if state.slip is None or state.extras is None:
         raise RuntimeError("step_save1 需要先运行 step_invert1")
     _save_inversion_mat(
         state.out_mat, state.slip, state.rms, state.rough, state.ret, state.extras,
+        ramp_choice=cfg.ramp_choice,
     )
     return state
 
@@ -646,9 +684,9 @@ def step_resamp(
     checkpoint_slip_mat: Optional[str] = None,
 ) -> InversionWorkflowState:
     """Step 6: ``resamp_insar_data``."""
-    _require_config(state)
+    cfg = _require_config(state)
     _ensure_slip(state, checkpoint_slip_mat)
-    it2 = int(state.para.iter_step2)
+    it2 = int(cfg.iter_step2)
     print("Step6: resamp_insar_data 开始 ...", flush=True)
     resamp_insar_data(
         state.slip,
@@ -658,9 +696,9 @@ def step_resamp(
         list(np.asarray(state.nmax).ravel()),
         state.dtypes,
         it2,
-        lonc=state.para.lonc,
-        latc=state.para.latc,
-        ref_lon=state.para.ref_lon,
+        lonc=cfg.lonc,
+        latc=cfg.latc,
+        ref_lon=cfg.ref_lon,
         fault_file=state.fault_abs,
         dec=dec,
         patch_workers=patch_workers,
@@ -671,9 +709,9 @@ def step_resamp(
 
 def step_invert2(state: InversionWorkflowState) -> InversionWorkflowState:
     """Step 7a: ``make_fault_from_insar1`` (iter_step2)."""
-    _require_config(state)
+    cfg = _require_config(state)
     _resolve_output_paths(state)
-    it2 = int(state.para.iter_step2)
+    it2 = int(cfg.iter_step2)
     slip2, rms2, rough2, ret2, extras2 = _run_make_fault(state, it2)
     state.slip2 = slip2
     state.rms2, state.rough2 = rms2, rough2
@@ -683,13 +721,14 @@ def step_invert2(state: InversionWorkflowState) -> InversionWorkflowState:
 
 def step_save2(state: InversionWorkflowState) -> InversionWorkflowState:
     """Step 7b: 保存第二次反演 ``.mat``."""
-    _require_config(state)
+    cfg = _require_config(state)
     _resolve_output_paths(state)
     if state.slip2 is None or state.extras2 is None:
         raise RuntimeError("step_save2 需要先运行 step_invert2")
     _save_inversion_mat(
         state.out_mat_step2, state.slip2, state.rms2, state.rough2,
         state.ret2, state.extras2,
+        ramp_choice=cfg.ramp_choice,
     )
     return state
 
@@ -700,12 +739,12 @@ def step_show2(
     show_figure: bool = True,
 ) -> InversionWorkflowState:
     """Step 7: 第二次滑动模型出图."""
-    _require_config(state)
+    cfg = _require_config(state)
     if state.slip2 is None:
         raise RuntimeError("step_show2 需要 state.slip2; 请先运行 step_invert2")
     _resolve_output_paths(state)
     if show_figure:
-        it2 = int(state.para.iter_step2)
+        it2 = int(cfg.iter_step2)
         _show_slip_figure(
             state.slip2,
             state,

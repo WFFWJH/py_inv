@@ -37,10 +37,44 @@ from load_fault_one_plane import _ll2xy  # noqa: E402
 # =====================================================================
 # GMT .grd  I/O   (xarray-based replacement for grdread2 / grdwrite2)
 # =====================================================================
-def read_grd(filename, engine: Optional[str] = None):
-    """Read a GMT netCDF grid. Returns (x, y, z) with z.shape == (ny, nx).
+_TEXT_GRID_SUFFIXES = frozenset({".txt", ".xyz", ".dat", ".asc", ".xy"})
 
-    Accepts either ``x/y`` (GMT4) or ``lon/lat`` (CF-style) coordinate names.
+
+def _read_grd_xyz(filename):
+    """Read whitespace-separated x y z text into a regular grid."""
+    data = np.loadtxt(filename, comments=("#", "%", "@"))
+    if data.ndim == 1:
+        data = data.reshape(1, -1)
+    if data.shape[1] < 3:
+        raise ValueError(
+            "%r: expected at least 3 columns (x y z), got %d"
+            % (filename, data.shape[1])
+        )
+
+    xc = np.asarray(data[:, 0], dtype=np.float64)
+    yc = np.asarray(data[:, 1], dtype=np.float64)
+    zc = np.asarray(data[:, 2], dtype=np.float64)
+    x = np.unique(xc)
+    y = np.unique(yc)
+    nx, ny = int(x.size), int(y.size)
+    ix = np.searchsorted(x, xc)
+    iy = np.searchsorted(y, yc)
+    if not (np.all(x[ix] == xc) and np.all(y[iy] == yc)):
+        raise ValueError(
+            "%r: x/y coordinates are not on a regular grid" % (filename,)
+        )
+
+    z = np.full((ny, nx), np.nan, dtype=np.float64)
+    z[iy, ix] = zc
+    return x, y, z
+
+
+def read_grd(filename, engine: Optional[str] = None):
+    """Read a GMT netCDF grid or xyz text file. Returns (x, y, z) with z.shape == (ny, nx).
+
+    NetCDF: accepts either ``x/y`` (GMT4) or ``lon/lat`` (CF-style) coordinate names.
+    Text: whitespace-separated three columns ``x y z`` on a regular grid
+    (extensions ``.txt``, ``.xyz``, ``.dat``, ``.asc``, ``.xy``).
 
     依次尝试 ``h5netcdf``、默认引擎、``netcdf4``, 避免部分环境下 ``netCDF4`` DLL 失败.
 
@@ -50,6 +84,9 @@ def read_grd(filename, engine: Optional[str] = None):
         若给定 (如 ``"h5netcdf"`` / ``"netcdf4"`` / ``None`` 为 scipy 类默认),
         仅使用该引擎; 未安装则抛错. 供测试或强制复现; 一般调用勿传.
     """
+    if Path(filename).suffix.lower() in _TEXT_GRID_SUFFIXES:
+        return _read_grd_xyz(filename)
+
     import xarray as xr  # lazy import: users may only need the math
 
     if engine is not None:
