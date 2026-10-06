@@ -185,124 +185,6 @@ def write_grd(x, y, z, filename):
 _R_GOOD_DEFAULT = 0.4
 
 
-def _rms_block(x, y, z, nres_min, nres_max, method):
-    """Evaluate a candidate block. Returns (xo, yo, zo, ngood, r_good, rms).
-
-    Matches MATLAB's rms_block_demean / rms_block_detrend semantics:
-        * too-small block  -> rms = 0       (will be accepted)
-        * appropriately-sized block -> real rms from mean/plane fit
-        * too-large block  -> rms = 1000    (forces subdivision)
-        * empty block      -> ngood == 0    (caller should skip)
-    """
-    nx = x.size
-    ny = y.size
-    mask = ~np.isnan(z)
-    ngood = int(mask.sum())
-    n_block = nx * ny
-    if ngood == 0:
-        return (np.nan, np.nan, np.nan, 0, 0.0, 0.0)
-
-    xx, yy = np.meshgrid(x, y)
-    xdata = xx[mask]
-    ydata = yy[mask]
-    zdata = z[mask]
-    r_good = ngood / n_block
-
-    xo = float(xdata.mean())
-    yo = float(ydata.mean())
-    zo = float(zdata.mean())
-
-    lx = int(np.unique(x).size)
-    ly = int(np.unique(y).size)
-
-    if method == "mean":
-        if ngood <= 3 or lx <= nres_min or ly <= nres_min:
-            rms = 0.0
-        elif ngood > 5 and 2 < lx < nres_max and 2 < ly < nres_max:
-            rms = float(np.sqrt(np.sum((zdata - zo) ** 2) / ngood))
-        else:
-            rms = 1000.0
-    elif method == "trend":
-        if ngood <= 3 or lx <= nres_min or ly <= nres_min:
-            rms = 0.0
-        elif ngood > 3 and 2 < lx <= nres_max and 2 < ly <= nres_max:
-            # plane fit z = a*x + b*y + c
-            A = np.column_stack([xdata, ydata, np.ones(ngood)])
-            C, *_ = np.linalg.lstsq(A, zdata, rcond=None)
-            zfit = A @ C
-            rms = float(np.sqrt(np.sum((zdata - zfit) ** 2) / ngood))
-        else:
-            rms = 1000.0
-    else:
-        raise ValueError(f"unknown method: {method!r}")
-
-    return xo, yo, zo, ngood, r_good, rms
-
-
-def _quad_decomp(x, y, z, threshold, nres_min, nres_max, method, out):
-    """Recursive 4-quadrant decomposition. Appends accepted blocks to `out`.
-
-    `out` is a list of tuples (xc, yc, zc, ngood, rms, x1, x2, y1, y2)
-    whose order follows a Q1,Q2,Q3,Q4 pre-order traversal (matches MATLAB).
-    """
-    nx = x.size
-    ny = y.size
-
-    # --- base case: block already small enough ----------------------
-    if nx <= nres_min or ny <= nres_min:
-        mask = ~np.isnan(z)
-        ngood = int(mask.sum())
-        if ngood == 0:
-            return
-        r_good = ngood / (nx * ny)
-        if r_good <= _R_GOOD_DEFAULT:
-            return
-        zgood = z[mask]
-        zbar = float(zgood.mean())
-        rms = float(np.sqrt(np.sum((zgood - zbar) ** 2) / ngood))
-        if rms < 1e-6:
-            # MATLAB mean base-case uses 10, trend base-case uses 1
-            rms = 10.0 if method == "mean" else 1.0
-        out.append((float(x.mean()), float(y.mean()), zbar, ngood, rms,
-                    float(x[0]), float(x[-1]), float(y[0]), float(y[-1])))
-        return
-
-    # --- split into 4 quadrants -------------------------------------
-    # MATLAB 1-based midpoints  nx2=floor(nx/2)+1, nx3=nx2, nx4=nx
-    nx_mid = nx // 2 + 1
-    ny_mid = ny // 2 + 1
-    x_left, x_right = x[:nx_mid], x[nx_mid - 1:]
-    y_low, y_high = y[:ny_mid], y[ny_mid - 1:]
-
-    # quadrant ordering must match MATLAB: Q1, Q2, Q3, Q4
-    quadrants = (
-        (x_left, y_low, z[:ny_mid, :nx_mid]),         # Q1  y-low , x-left
-        (x_right, y_low, z[:ny_mid, nx_mid - 1:]),    # Q2  y-low , x-right
-        (x_left, y_high, z[ny_mid - 1:, :nx_mid]),    # Q3  y-high, x-left
-        (x_right, y_high, z[ny_mid - 1:, nx_mid - 1:]),  # Q4  y-high, x-right
-    )
-
-    for xs, ys, zs in quadrants:
-        xo, yo, zo, ngood, r_good, rms = _rms_block(
-            xs, ys, zs, nres_min, nres_max, method
-        )
-        if ngood == 0:
-            continue
-
-        if rms <= threshold and r_good > _R_GOOD_DEFAULT:
-            # accept this sub-block
-            zgood = zs[~np.isnan(zs)]
-            rms_acc = float(np.sqrt(np.sum((zgood - zo) ** 2) / ngood))
-            if rms_acc < 1e-6:
-                rms_acc = 1.0  # rms_default (same for mean & trend here)
-            out.append((xo, yo, zo, ngood, rms_acc,
-                        float(xs[0]), float(xs[-1]),
-                        float(ys[0]), float(ys[-1])))
-        elif rms > threshold:
-            _quad_decomp(xs, ys, zs, threshold, nres_min, nres_max, method, out)
-        # else: dropped (rms <= threshold but r_good too low)
-
-
 def _results_to_arrays(out):
     if not out:
         empty = np.array([], dtype=np.float64)
@@ -313,17 +195,107 @@ def _results_to_arrays(out):
             arr[:, 5], arr[:, 6], arr[:, 7], arr[:, 8])
 
 
+def _block_at_min_size(lx, ly, nres_min):
+    """Match sample.py's default 'or' stopping rule."""
+    return lx <= nres_min or ly <= nres_min
+
+
+def _quad_decomp_sample(x, y, z, threshold, nres_min, nres_max, method):
+    """Stack-based, non-overlapping quadtree pass used by sample.py."""
+    ny, nx = z.shape
+    stack = [(np.arange(nx), np.arange(ny))]
+    out = []
+
+    while stack:
+        x_idx, y_idx = stack.pop()
+        zsub = z[np.ix_(y_idx, x_idx)]
+        valid = ~np.isnan(zsub)
+        ngood = int(valid.sum())
+        if ngood == 0:
+            continue
+
+        lx, ly = len(x_idx), len(y_idx)
+        r_good = ngood / (lx * ly)
+        zdata = zsub[valid]
+        rows, cols = np.nonzero(valid)
+        xdata = x[x_idx[cols]]
+        ydata = y[y_idx[rows]]
+        xmean = float(xdata.mean())
+        ymean = float(ydata.mean())
+        zmean = float(zdata.mean())
+
+        if ngood == 1:
+            rms_true = 0.0
+            rms_for_split = 1.0e30
+        elif method == "trend":
+            design = np.column_stack([xdata, ydata, np.ones(ngood)])
+            coeffs, *_ = np.linalg.lstsq(design, zdata, rcond=None)
+            residual = zdata - design @ coeffs
+            rms_true = float(np.sqrt(np.mean((zdata - zmean) ** 2)))
+            rms_for_split = float(np.sqrt(np.mean(residual ** 2)))
+        else:
+            rms_true = float(np.sqrt(np.mean((zdata - zmean) ** 2)))
+            rms_for_split = rms_true
+
+        can_split_x = lx >= 2
+        can_split_y = ly >= 2
+        need_split = False
+
+        if _block_at_min_size(lx, ly, nres_min) or not (
+            can_split_x or can_split_y
+        ):
+            if r_good <= _R_GOOD_DEFAULT:
+                continue
+        elif lx > 2 and lx < nres_max and ly > 2 and ly < nres_max:
+            if rms_for_split > threshold:
+                need_split = True
+            elif r_good <= _R_GOOD_DEFAULT:
+                continue
+        else:
+            need_split = True
+
+        if need_split and (can_split_x or can_split_y):
+            nx_mid, ny_mid = lx // 2, ly // 2
+            if can_split_x and can_split_y:
+                for ys_part in (y_idx[:ny_mid], y_idx[ny_mid:]):
+                    for xs_part in (x_idx[:nx_mid], x_idx[nx_mid:]):
+                        if xs_part.size and ys_part.size:
+                            stack.append((xs_part, ys_part))
+            elif can_split_x:
+                stack.extend(
+                    (xs_part, y_idx)
+                    for xs_part in (x_idx[:nx_mid], x_idx[nx_mid:])
+                    if xs_part.size
+                )
+            else:
+                stack.extend(
+                    (x_idx, ys_part)
+                    for ys_part in (y_idx[:ny_mid], y_idx[ny_mid:])
+                    if ys_part.size
+                )
+            continue
+
+        out.append((
+            xmean, ymean, zmean, ngood, rms_true,
+            float(x[x_idx[0]]), float(x[x_idx[-1]]),
+            float(y[y_idx[0]]), float(y[y_idx[-1]]),
+        ))
+
+    return out
+
+
 def make_insar_downsample(xinsar, yinsar, zinsar, nmin, nres_min, nres_max,
-                          method="mean", max_iter=100, verbose=True):
+                          method="mean", max_iter=100, verbose=True,
+                          initial_threshold=None):
     """Quadtree downsample an InSAR LOS matrix.
 
     Parameters
     ----------
     xinsar, yinsar : 1D arrays  (x[i] varies along columns, y[j] along rows)
     zinsar         : 2D array of shape (ny, nx) with NaNs allowed
-    nmin           : target number of output points  (accept if nmin <= N <= 1.3*nmin)
+    nmin           : target number of output points
     nres_min, nres_max : min/max block edge length (in pixels) allowed
-    method         : 'mean' or 'trend'
+    method         : 'mean' or 'trend' (trend fit is used only for split decisions)
 
     Returns
     -------
@@ -339,42 +311,112 @@ def make_insar_downsample(xinsar, yinsar, zinsar, nmin, nres_min, nres_max,
         raise ValueError(f"zinsar shape {z.shape} does not match (ny={y.size}, nx={x.size})")
     if method not in ("mean", "trend"):
         raise ValueError(f"method must be 'mean' or 'trend', got {method!r}")
+    valid = z[~np.isnan(z)]
+    if valid.size == 0:
+        raise ValueError("quad 下采样未产生任何有效块 (全为 NaN)")
+    if nres_min < 1 or nres_max < 1:
+        raise ValueError("nres_min 和 nres_max 必须为正整数")
+    points_num = max(1, int(nmin))
 
-    # Allow Python recursion for tall/wide grids.
-    _old = sys.getrecursionlimit()
-    sys.setrecursionlimit(max(_old, max(x.size, y.size) * 4))
-    try:
-        # initial threshold from z-range (matches MATLAB r1_norm*z_range, r1_norm=1)
-        z_range = float(np.nanmax(z) - np.nanmin(z))
-        threshold = z_range
+    if initial_threshold is None:
+        mean = float(valid.mean())
+        threshold = float(np.sqrt(np.mean((valid - mean) ** 2)))
+        if not np.isfinite(threshold) or threshold <= 0.0:
+            threshold = float(np.max(valid) - np.min(valid))
+        if not np.isfinite(threshold) or threshold <= 0.0:
+            threshold = 1.0
+    else:
+        threshold = float(initial_threshold)
+        if not np.isfinite(threshold) or threshold <= 0.0:
+            raise ValueError("initial_threshold 必须为有限正数")
 
-        out = []
-        _quad_decomp(x, y, z, threshold, nres_min, nres_max, method, out)
-        ndata = len(out)
+    n_lo = 0.99 * points_num
+    n_hi = 1.1 * points_num
 
-        for it in range(1, max_iter + 1):
-            if nmin <= ndata <= 1.3 * nmin:
-                break
-            n1 = ndata
-            threshold *= 1.05 if ndata > 1.3 * nmin else 0.95
-            out = []
-            _quad_decomp(x, y, z, threshold, nres_min, nres_max, method, out)
-            n2 = len(out)
-            ndata = n2
+    def run(current_threshold):
+        return _quad_decomp_sample(
+            x, y, z, current_threshold, int(nres_min), int(nres_max), method
+        )
+
+    out = run(threshold)
+    if not out:
+        raise ValueError("quad 下采样未产生任何有效块 (检查 NaN 掩膜或 Nres 参数)")
+    best_out = out
+    best_n = len(out)
+    ndata = best_n
+    best_diff = abs(best_n - points_num)
+    best_threshold = threshold
+    if verbose:
+        rms_values = np.asarray(out, dtype=np.float64)[:, 4]
+        print("max_rms_out:", float(rms_values.max()), "min_rms_out:", float(rms_values.min()))
+        print("threshold:", threshold, "NUM:", best_n)
+    if n_lo <= best_n <= n_hi:
+        return _results_to_arrays(out)
+
+    thr_lo = threshold if best_n > points_num else None
+    thr_hi = threshold if best_n <= points_num else None
+    n_prev = best_n
+    stagnant = 0
+
+    for it in range(1, max_iter + 1):
+        if thr_lo is not None and thr_hi is not None and thr_hi > thr_lo:
+            threshold = 0.5 * (thr_lo + thr_hi)
+        elif ndata > points_num:
+            threshold *= 1.1
+        else:
+            threshold *= 0.9
+
+        if not np.isfinite(threshold) or threshold <= 0.0:
             if verbose:
-                print(f"Iter {it}: threshold={threshold:.4f}, N1={n1}, N2={n2}")
-            # stopping criterion (matches MATLAB)
-            if n2 > 0.9 * nmin and n2 < 2 * nmin and (n2 - n1) < 0.005 * max(n1, 1):
+                print("threshold 无效, 停止迭代")
+            break
+
+        out = run(threshold)
+        ndata = len(out)
+        if ndata == 0:
+            raise ValueError("quad 下采样迭代后块数为 0 (threshold=%.4g)" % threshold)
+        diff = abs(ndata - points_num)
+        if diff < best_diff or (diff == best_diff and ndata >= best_n):
+            best_out = out
+            best_n = ndata
+            best_diff = diff
+            best_threshold = threshold
+
+        if verbose:
+            rms_values = np.asarray(out, dtype=np.float64)[:, 4]
+            print(f"strain: {threshold:.4f} NUM: {ndata} (iter {it}, was {n_prev})")
+            print("max_rms_out:", float(rms_values.max()), "min_rms_out:", float(rms_values.min()))
+        if n_lo <= ndata <= n_hi:
+            break
+
+        if ndata == n_prev:
+            stagnant += 1
+            if stagnant >= 2 and (threshold > rms_values.max() or threshold < rms_values.min()):
+                if verbose:
+                    print("块数连续不变, 提前停止")
                 break
         else:
-            if verbose:
-                print("Reached max iteration, Ndata may still be < Nmin")
-        if verbose:
-            print(f"Nint: {it}")
-    finally:
-        sys.setrecursionlimit(_old)
+            stagnant = 0
 
-    return _results_to_arrays(out)
+        if ndata > points_num:
+            thr_lo = threshold if thr_lo is None else max(thr_lo, threshold)
+        else:
+            thr_hi = threshold if thr_hi is None else min(thr_hi, threshold)
+        if thr_lo is not None and thr_hi is not None and thr_hi <= thr_lo * 1.0001:
+            if verbose:
+                print("阈值搜索区间已收窄完毕")
+            break
+        n_prev = ndata
+    else:
+        if verbose:
+            print("Reached max iteration, 点数可能仍未达到目标")
+
+    if verbose:
+        print(
+            f"Nint done, blocks = {best_n} (target {points_num}, "
+            f"thr={best_threshold:.4g}, in_window={n_lo <= best_n <= n_hi})"
+        )
+    return _results_to_arrays(best_out)
 
 
 # =====================================================================

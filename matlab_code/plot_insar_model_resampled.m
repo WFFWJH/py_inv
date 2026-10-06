@@ -74,7 +74,7 @@ function plot_insar_model_resampled(sampled_data_file,los_model,varargin)
 %    [xo,yo] = utm2ll(lon_eq,lat_eq,0,1);
    [xo,yo] = ll2xy(lon_eq,lat_eq,ref_lon);
    
-   sz = 30;
+   sz = 3;
 %    h0=figure('units','normalized','outerposition',[0 0 1 1]);
 %    set(h0,'renderer','painters');
    h0 = figure;

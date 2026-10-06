@@ -168,6 +168,10 @@ if add_col > 0
         result1{k} = C;
     end
     [H,Wb,Wl,Wr] = deal(result1{:});
+else
+    G_raw_ramp = G_raw;
+    G_ramp = G;
+    
 end
 %% construct the Green's function
 % adjust the relative weight between ASC and DES track to be 1:1
@@ -256,7 +260,7 @@ if iint ==1
     for i = 1:numel(tracks)
         fname = [ tracks{i}, '/los_samp', num2str(iint), '.mat'];
         plot_insar_model_resampled(fname,insar_model{i},'iter_step',iint,'fault',fault_file,'model_type',...
-            model_type,'misfit_range',100,'defo_max',300,'ref_lon',ref_lon,'lonc',lon_eq,'latc',lat_eq);
+            model_type,'misfit_range',1,'defo_max',3,'ref_lon',ref_lon,'lonc',lon_eq,'latc',lat_eq);
     end
 
 end
@@ -267,6 +271,11 @@ if iint == 0
     save('greens_okada_iint0.mat', ...
          'G_last','Bdata','bd_last','slip_model', 'bdata_sm', 'GrF', ...
          'H', 'h1', 'Wb', 'Wl', 'Wr','ramp_choice','u');
+    for i = 1:numel(tracks)
+        fname = [ tracks{i}, '/los_samp', num2str(iint), '.mat'];
+        plot_insar_model_resampled(fname,insar_model{i},'iter_step',iint,'fault',fault_file,'model_type',...
+            model_type,'misfit_range',1,'defo_max',3,'ref_lon',ref_lon,'lonc',lon_eq,'latc',lat_eq);
+    end
 end
     
 % compute_moment(slip_model,model_type);

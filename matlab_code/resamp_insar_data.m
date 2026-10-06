@@ -54,10 +54,10 @@ function resamp_insar_data(slip_model_in, track,npt,Nmin,Nmax,data_types,iter_st
        this_npt=npt(k);
        
        [~,~,demin]=grdread2([this_track,'/','dem_low.grd']);
-       [~,~,losin]=grdread2([this_track,'/','los_ll_low','.grd']);   % in the unit of cm
-       [~,~,ze]=grdread2([this_track,'/','look_e_low','.grd']);
-       [~,~,zn]=grdread2([this_track,'/','look_n_low','.grd']);
-       [x1,y1,zu]=grdread2([this_track,'/','look_u_low','.grd']);
+       [~,~,losin]=grdread2([this_track,'/','los_clean_detrend','.grd']);   % in the unit of cm
+       [~,~,ze]=grdread2([this_track,'/','look_e','.grd']);
+       [~,~,zn]=grdread2([this_track,'/','look_n','.grd']);
+       [x1,y1,zu]=grdread2([this_track,'/','look_u','.grd']);
        
        % multi-look to reduce the computation time
        if Nlook > 1

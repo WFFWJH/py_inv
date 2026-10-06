@@ -16,7 +16,7 @@ ramp_choice = lower(ramp_choice);
 [filepath, ~, ~] = fileparts(sampled_data_file);
 
 switch option
-    case {'insar', 'AZO'}
+    case {'insar', 'azi'}
         sampled_data = data.sampled_insar_data;
         % rms_insar = double(data.rms_out);
         h1 = size(sampled_data, 1);

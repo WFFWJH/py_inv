@@ -40,12 +40,15 @@ Nint = 0;
 
 max_iter = 100;
 while (Ndata < Nmin || Ndata > 1.3*Nmin)
-    N1 = length(zout);
+    Num1 = length(zout);
     
     if Ndata>1.3*Nmin
         r1 = r1*1.05;
         
     else
+        if r1 > max(rms_out)
+            r1 = max(rms_out);
+        end
         r1 = r1 * 0.95;
         
     end
@@ -55,12 +58,14 @@ while (Ndata < Nmin || Ndata > 1.3*Nmin)
         [xout, yout, zout, Npt, rms_out, xx1, xx2, yy1, yy2] = quad_decomp_mean(xinsar, yinsar, zinsar, r1, Nres_min, Nres_max, [], [], [], [], [], [], [], [], []);
     end
     
-    N2 = length(zout); %after decreasing the threshold
-Ndata = N2;
+    Num2 = length(zout); %after decreasing the threshold
+Ndata = Num2;
     Nint = Nint + 1;
-    fprintf('Iter %d: r1=%.4f, N1=%d, N2=%d\n', Nint, r1, N1, N2);
+    Max_rms = max(rms_out);
+    Min_rms = min(rms_out);
+    fprintf('Iter %d: r1=%.4f, N1=%d, N2=%d, Max_rms = %.4f,Min_rms = %.4f\n', Nint, r1, Num1, Num2, Max_rms,Min_rms);
 
-    if (N2 > 0.9 * Nmin && N2<2*Nmin && (N2 - N1) < 0.005 * N1)
+    if (Num2 > 0.9 * Nmin && Num2<2*Nmin && (Num2 - Num1) < 0.005 * Num1)
         break; %stop the iteration if the the number of points are not increasing by 0.5 percent of the previous one
     end
 
@@ -405,7 +410,8 @@ yy2 = yy2_in;
 
 rms_default = 1; %default rms
 r_good_default = 0.4; %default percentage of good pixels
-if (nx <= Nres_min || ny <= Nres_min) %only continue if the size of the blocks are greater than Nres*Nres
+% if (nx <= Nres_min || ny <= Nres_min) %only continue if the size of the blocks are greater than Nres*Nres
+if (nx <= max(Nres_min, 2) || ny <= max(Nres_min, 2))    
     xout_block_total = mean(xin);
     yout_block_total = mean(yin);
     z_block_good = zin(~isnan(zin));

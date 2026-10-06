@@ -123,8 +123,8 @@ def plot_insar_model_resampled(
     except (AttributeError, KeyError, TypeError):
         from matplotlib import cm
         cmap = cm.get_cmap("jet")  # type: ignore[assignment]
-    fig = plt.figure(figsize=(10, 7.0))
-    sz = 30
+    fig = plt.figure(figsize=(7.5, 7.0))
+    sz = 3
 
     ax1 = fig.add_axes([0.04, 0.55, 0.42, 0.42])
     ax1.set_facecolor("0.95")

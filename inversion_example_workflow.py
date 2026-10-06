@@ -342,9 +342,9 @@ def read_data_list(
         if t == "insar":
             nmin.append(8)
             nmax.append(500)
-        elif t == "azi":
-            nmin.append(4)
-            nmax.append(50)
+        elif t == "azo":
+            nmin.append(2)
+            nmax.append(40)
         else:
             nmin.append(8)
             nmax.append(500)
@@ -813,8 +813,8 @@ def run_workflow_steps(
 
 if __name__ == "__main__":
     CONFIG_DIR: Optional[Union[str, os.PathLike]] = None
-    START_STEP = 5   # 3 | 5 | 6 | 7  (Step 0/4 始终自动执行)
-    END_STEP = 5
+    START_STEP = 6   # 3 | 5 | 6 | 7  (Step 0/4 始终自动执行)
+    END_STEP = 7
     SKIP_DOWNSAMPLE = True
     OUT_MAT: Optional[str] = None
     OUT_PNG: Optional[str] = None

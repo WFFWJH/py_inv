@@ -173,7 +173,8 @@ def make_fault_from_insar1(slip_model_vs: np.ndarray,
     slip_model : ndarray
         Input geometry augmented with u in columns 11/12 (0-indexed), matching
         MATLAB's `slip_model(:, 12/13)`.
-    RMS_misfit : float
+    rms_val : float
+        Root-mean-square residual of the data rows.
     model_roughness : float
     return_var : ndarray (5,)
         [redu_perc, exitflag, rms, Mw, M0/1e20]
@@ -388,7 +389,6 @@ def make_fault_from_insar1(slip_model_vs: np.ndarray,
             print(f"  optimizer: {res.message}")
 
     rough_matrix = H @ u
-    RMS_misfit = float(np.sum((G_last @ u - bd_last) ** 2))
     model_roughness = float(np.sqrt(np.mean(rough_matrix * rough_matrix))) \
         if rough_matrix.size else 0.0
 
@@ -456,4 +456,4 @@ def make_fault_from_insar1(slip_model_vs: np.ndarray,
         if verbose:
             print(f"Saved Greens snapshot -> {save_greens_path}")
 
-    return slip_model, RMS_misfit, model_roughness, return_var, extras
+    return slip_model, rms_val, model_roughness, return_var, extras

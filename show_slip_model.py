@@ -295,8 +295,8 @@ def show_slip_model(
     cvals = np.sqrt(slip1 ** 2 + slip2 ** 2)
     cmax = max(float(np.max(cvals)) if n else 1.0, 1e-20)
 
-    fig = plt.figure(figsize=(20, 10), dpi=150)
-    ax = fig.add_subplot(111, projection="3d")
+    fig = plt.figure(figsize=(15, 10), dpi=150)
+    ax = fig.add_axes([0.025, 0.055, 0.88, 0.89], projection="3d")
     normc = colors.Normalize(vmin=0.0, vmax=cmax)
     try:
         cmap = matplotlib.colormaps["jet"]
@@ -316,7 +316,8 @@ def show_slip_model(
     )
     ax.add_collection3d(coll)
 
-    cb = fig.colorbar(ScalarMappable(cmap=cmap, norm=normc), ax=ax, shrink=0.6, pad=0.08, aspect=18)
+    cax = fig.add_axes([0.93, 0.22, 0.018, 0.56])
+    cb = fig.colorbar(ScalarMappable(cmap=cmap, norm=normc), cax=cax, aspect=30)
     cb.ax.tick_params(labelsize=8)
     cb.set_label("slip (m)", fontsize=9)
 
@@ -352,10 +353,18 @@ def show_slip_model(
             ax.plot(xsa, ysa, [0.0, 0.0], c="k", linewidth=1.5)
             limit_extras.append((xsa, ysa, np.array([0.0, 0.0])))
 
-    ax.set_xlabel("Easting (km)", fontsize=9)
-    ax.set_ylabel("Northing (km)", fontsize=9)
-    ax.set_zlabel("Depth (km)", fontsize=9)
-    ax.set_title(title, fontsize=10)
+    from matplotlib.ticker import MaxNLocator, ScalarFormatter
+
+    for axis in (ax.xaxis, ax.yaxis, ax.zaxis):
+        axis.set_major_locator(MaxNLocator(nbins=4))
+        axis.set_major_formatter(ScalarFormatter(useOffset=False))
+        axis.get_major_formatter().set_scientific(False)
+    ax.tick_params(axis="both", which="major", labelsize=8, pad=1)
+    ax.tick_params(axis="z", which="major", labelsize=8, pad=1)
+    ax.set_xlabel("Easting (km)", fontsize=10, labelpad=7)
+    ax.set_ylabel("Northing (km)", fontsize=10, labelpad=7)
+    ax.set_zlabel("Depth (km)", fontsize=10, labelpad=5)
+    ax.set_title(title, fontsize=12, pad=10)
     ax.grid(True)
 
     # ----- 坐标轴范围 (改绘图视窗主要改这里) -----
@@ -376,11 +385,6 @@ def show_slip_model(
         ax.set_box_aspect((max(xl[1] - xl[0], 1e-9), max(yl[1] - yl[0], 1e-9), max(zl[1] - zl[0], 1e-9)))
     except Exception:
         pass
-    try:
-        plt.tight_layout(pad=0.6)
-    except Exception:
-        pass
-
     # Slip arrows: center origin, strike+dip direction, length ~ (slip/slipmax)*plot size.
     # mplot3d has no z-buffer: use lifted arrows + Line3DCollection + triangular heads
     # (Poly3DCollection) so they depth-sort with fault faces. Batched quiver3 is unreliable.
@@ -494,7 +498,7 @@ if __name__ == "__main__":
     here = os.path.dirname(os.path.abspath(__file__))
 
     # --- 输入 ---
-    slip_path = os.path.join(here, "py_inversion_iint0.mat")
+    slip_path = os.path.join(here, "py_inversion_iint1.mat")
     ref_lon, lonc, latc = 95.0, 95.33, 19.61   # 与反演 configpara 一致, 用于震中/迹线 km 换算
     fault_path = os.path.join(here, "fault_trace.txt")  # 4 列 lon1 lat1 lon2 lat2; 无则 None
     out_png = None  # None -> 与 slip 同目录 *_show.png

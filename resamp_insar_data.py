@@ -34,7 +34,7 @@ def resamp_insar_data(
     dec: int = 1,
     output_path: Optional[str] = None,
     verbose: bool = True,
-    quad_verbose: Optional[bool] = None,
+    quad_verbose: Optional[bool] = True,
     patch_workers: Optional[int] = None,
 ) -> None:
     """用 ``slip_model_in`` 前向算模型场再 quad 重采样.

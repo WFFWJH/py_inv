@@ -339,7 +339,7 @@ def iter_quad_downsample(
     initial_threshold: Optional[float] = None,
     max_iter: int = 100,
     verbose: bool = True,
-    min_stop_mode: str = "and",
+    min_stop_mode: str = "or",
     representative: str = "mean",
 ):
     """迭代调节 threshold，使四叉树块数逼近 points_num。
@@ -359,7 +359,7 @@ def iter_quad_downsample(
         若无效再用 1.5*std 或 1.0。
         注意: 高层入口通常会传入 global_rms。
     min_stop_mode
-        ``"and"`` / ``"or"``，见分区头注释。默认 ``"and"``。
+        ``"and"`` / ``"or"``，见分区头注释。默认 ``"or"``。
     representative
         ``"mean"`` / ``"median_pixel"``，见分区头注释。
 
@@ -374,7 +374,7 @@ def iter_quad_downsample(
     points_num = max(1, int(points_num))
     z = np.asarray(z, dtype=np.float64)
 
-    n_lo = 0.9 * points_num
+    n_lo = 0.99 * points_num
     n_hi = 1.1 * points_num
 
     # ----- 确定初始 threshold -----
@@ -476,7 +476,7 @@ def iter_quad_downsample(
         # 块数连续两轮不变 → 阈值已不影响结果, 早停
         if ndata == n_prev:
             stagnant += 1
-            if stagnant >= 2:
+            if stagnant >= 2 and (threshold > np.max(out[:, 4]) or threshold < np.min(out[:, 4])):
                 if verbose:
                     print("块数连续不变, 提前停止")
                 break
@@ -1031,7 +1031,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--min-stop-mode",
         dest="min_stop_mode",
-        default="and",
+        default="or",
         choices=("and", "or"),
         help="最小块停止条件: and=xy均达Nres_min(默认); or=MATLAB原版",
     )
