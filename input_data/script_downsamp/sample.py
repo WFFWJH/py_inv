@@ -462,7 +462,7 @@ def iter_quad_downsample(
             best_out = out
 
         if verbose:
-            print(f"strain: {threshold:.4f} NUM: {ndata} (iter {it}, was {n_prev})")
+            print(f"threshold: {threshold:.4f} NUM: {ndata} (iter {it}, was {n_prev})")
             print(
                 "max_rms_out:",
                 float(np.max(out[:, 4])),
