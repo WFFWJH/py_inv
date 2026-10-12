@@ -191,7 +191,7 @@ title("");
 grid on;
 
 
-%%
+%%  comsol result
 track_num = 4;
 
 G_comsol = G_raw_azi;
@@ -204,23 +204,25 @@ G_comsol = G_raw_azi;
 % end
 % assert(G_index1-1 == size(G_raw_azi,2));
 G_comsol = [G_comsol,GrF(:,end-track_num*add_col+1:end)];
-assert(size(G_comsol,2) == size(G_raw,2))
-los_samp_paths = [...
-    ..."./myanmar/D33/LOS/los_samp1.mat",...
-    ..."./myanmar/D33/RNG/los_samp1.mat",...
-    "./azi_best/D106/AZI/los_samp1.mat",...
-    ..."./myanmar/D106/LOS/los_samp1.mat",...
-    ... "./myanmar/D106/RNG/los_samp1.mat",...
-    "./azi_best/D33/AZI/los_samp1.mat",...
-    ..."./myanmar/A143/LOS/los_samp1.mat",...
-    ... "./myanmar/A143/RNG/los_samp1.mat",...
-    "./azi_best/A143/AZI/los_samp1.mat",...
-    ..."./myanmar/A70/LOS/los_samp1.mat",...
-    ..."./myanmar/A70/RNG/los_samp1.mat",...
-    "./azi_best/A70/AZI/los_samp1.mat"];
+assert(size(G_comsol,2) == size(GrF,2))
+
+data_list = "detrend.list1";
+fid = fopen(data_list);
+tmp_txt = fgetl(fid);
+count = 0;
+los_samp_paths  = strings(track_num,1);
+while tmp_txt ~= -1
+    count = count + 1;
+    strs = strsplit(tmp_txt);
+    los_samp_paths(count) = cellstr(strs{1})+"/los_samp0.mat";
+    tmp_txt = fgetl(fid);
+end
+fclose(fid);
+
 points_every_track = zeros(4,1);
 G_comsol_raw = G_comsol;
 G_raw_index = 1;
+d_raw = d_raw';
 d_comsol_raw = d_raw;
 for i = 1:length(los_samp_paths)
     data = load(los_samp_paths(i));

@@ -96,7 +96,7 @@ for i = 1:numel(tracks)
     type = data_type{i};
     [G_raw{i}, G{i}, bd_raw{i}, bd{i}] = build_green_function( ...
         slip_model, fname, type, ramp_choice, model_type);
-    if strcmp(type, 'AZO')
+    if strcmp(type, 'azi')
         G_raw{i}  = G_raw{i}  * beta;
         G{i}      = G{i}      * beta;
         bd_raw{i} = bd_raw{i} * beta;

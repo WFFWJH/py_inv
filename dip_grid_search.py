@@ -19,6 +19,7 @@ r"""用 Step 5 反演对四段断层倾角做网格搜索 (参照 ``inversion_ex
     python dip_grid_search.py --seg1 70:90:5 --seg2 82 --seg3 82 --seg4 82
     python dip_grid_search.py --mode grid --seg1 75,80,85 --seg2 78,82 --seg3 85,90 --seg4 80
     python dip_grid_search.py --rounds 3 --backend numba         # 坐标下降 + numba 加速
+    python dip_grid_search.py --mode grid --workers 4            # 4 个进程并行搜索
 
 倾角范围写法: ``82`` 单值 / ``75,80,85`` 枚举 / ``70:90:5`` 等差 (含端点)。
 
@@ -37,6 +38,7 @@ import os
 import re
 import sys
 import time
+from concurrent.futures import ProcessPoolExecutor
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -156,6 +158,39 @@ def run_combo(
     )
 
 
+def _combo_metrics(rec: Dict[str, Any]) -> Dict[str, Any]:
+    """Drop large arrays before caching or returning a result from a worker."""
+    return {
+        key: rec[key]
+        for key in ("dips", "rms", "redu_perc", "exitflag", "Mw", "rough",
+                    "max_slip", "rms_misfit_chi2")
+    }
+
+
+_WORKER_STATE: Optional[InversionWorkflowState] = None
+
+
+def _init_combo_worker(config_dir: str, baseline: Sequence[float]) -> None:
+    global _WORKER_STATE
+    state = InversionWorkflowState()
+    step_load_config(state, config_dir, dip_per_segment=baseline)
+    fix_track_paths(state, config_dir)
+    _check_los_samp_files(state, int(state.config.iter_step))
+    _WORKER_STATE = state
+
+
+def _run_combo_worker(
+    task: Tuple[Sequence[float], str, int],
+) -> Dict[str, Any]:
+    state = _WORKER_STATE
+    if state is None:
+        raise RuntimeError("并行 worker 尚未初始化")
+    dips, backend, max_nfev = task
+    return _combo_metrics(
+        run_combo(state, dips, backend=backend, max_nfev=max_nfev)
+    )
+
+
 # ---------------------------------------------------------------------------
 # 输出
 # ---------------------------------------------------------------------------
@@ -256,10 +291,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--config-dir", default=_HERE)
     ap.add_argument("--mode", choices=("each", "grid"), default="each",
                     help="each=逐段扫描(默认, 省 时); grid=四段全网格")
-    ap.add_argument("--seg1", default="74,78,82,86,90", help="第 1 段倾角范围")
-    ap.add_argument("--seg2", default="74,78,82,86,90", help="第 2 段倾角范围")
-    ap.add_argument("--seg3", default="74,78,82,86,90", help="第 3 段倾角范围")
-    ap.add_argument("--seg4", default="74,78,82,86,90", help="第 4 段倾角范围")
+    ap.add_argument("--seg1", default="60:120:5", help="第 1 段倾角范围")
+    ap.add_argument("--seg2", default="60:120:5", help="第 2 段倾角范围")
+    ap.add_argument("--seg3", default="60:120:5", help="第 3 段倾角范围")
+    ap.add_argument("--seg4", default="60:120:5", help="第 4 段倾角范围")
     ap.add_argument("--baseline", default=None,
                     help="each 模式的基线倾角 (默认取 configpara 的 ##dip)")
     ap.add_argument("--rounds", type=int, default=1,
@@ -268,9 +303,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     help="okada 后端 (默认取 configpara 的 okada_backend; 可填 numba 加速)")
     ap.add_argument("--max-nfev", type=int, default=None,
                     help="求解器最大迭代 (默认取 configpara)")
+    ap.add_argument("--workers", type=int, default=1,
+                    help="并行进程数 (默认 1; 大矩阵计算建议从 2 开始)")
     ap.add_argument("--out-dir", default=os.path.join(_HERE, "dip_search_out"))
     ap.add_argument("--show", action="store_true", help="弹窗显示 (默认只存文件)")
     args = ap.parse_args(argv)
+    if args.workers < 1:
+        ap.error("--workers 必须 >= 1")
 
     if not args.show:
         import matplotlib
@@ -312,78 +351,122 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     results: List[Dict[str, Any]] = []
     measured: Dict[Tuple[float, ...], Dict[str, Any]] = {}
     best: Optional[Dict[str, Any]] = None
-    best_extras: Optional[Dict[str, Any]] = None
     t_first: Optional[float] = None
-
-    def do_combo(dips: Sequence[float], **meta: Any) -> Dict[str, Any]:
-        nonlocal best, t_first, best_extras
-        key = tuple(round(float(d), 6) for d in dips)
-        if key in measured:
-            return measured[key]
-        t0 = time.perf_counter()
-        rec = run_combo(state, dips, backend=backend, max_nfev=max_nfev)
-        dt = time.perf_counter() - t0
-        if t_first is None:
-            t_first = dt
-            print("  (预计剩余约 %.0f 分钟)"
-                  % (dt * (n_total - len(measured) - 1) / 60.0), flush=True)
-        rec.update(meta)
-        rec["dips"] = [float(d) for d in dips]
-        results.append(rec)
-        measured[key] = rec
-        csvw.add(rec)
-        print("[%s] dips=%s  RMS=%.6f  redu=%.3f%%  rough=%.4f  Mw=%.4f  (%.1fs)"
-              % (meta.get("tag", ""), rec["dips"], rec["rms"], rec["redu_perc"],
-                 rec["rough"], rec["Mw"], dt), flush=True)
-        if best is None or rec["rms"] < best["rms"]:
-            best = rec
-            # extras 含 G_last/GrF/H 等大矩阵 (~百 MB/组), 只保留当前最优的
-            best_extras = rec.pop("extras")
-        else:
-            rec.pop("extras")
-        return rec
+    executor: Optional[ProcessPoolExecutor] = None
 
     try:
+        if args.workers > 1:
+            executor = ProcessPoolExecutor(
+                max_workers=args.workers,
+                initializer=_init_combo_worker,
+                initargs=(args.config_dir, baseline),
+            )
+
+        def evaluate_batch(
+            candidates: Sequence[Tuple[Sequence[float], Dict[str, Any]]],
+        ) -> List[Dict[str, Any]]:
+            nonlocal best, t_first
+            new_dips: Dict[Tuple[float, ...], Sequence[float]] = {}
+            for dips, _ in candidates:
+                key = tuple(round(float(d), 6) for d in dips)
+                if key not in measured:
+                    new_dips.setdefault(key, dips)
+
+            keys = list(new_dips)
+            started = time.perf_counter()
+            if executor is not None:
+                tasks = ((new_dips[key], backend, max_nfev) for key in keys)
+                computed = executor.map(_run_combo_worker, tasks)
+                for key, rec in zip(keys, computed):
+                    measured[key] = rec
+            else:
+                for key in keys:
+                    rec = run_combo(
+                        state, new_dips[key], backend=backend, max_nfev=max_nfev,
+                    )
+                    measured[key] = _combo_metrics(rec)
+            elapsed = time.perf_counter() - started
+            per_combo = elapsed / len(keys) if keys else 0.0
+            if t_first is None and keys:
+                t_first = per_combo
+                remaining = max(0, n_total - len(measured))
+                print("  (预计剩余约 %.0f 分钟)" % (per_combo * remaining / 60.0),
+                      flush=True)
+
+            batch_results: List[Dict[str, Any]] = []
+            for dips, meta in candidates:
+                key = tuple(round(float(d), 6) for d in dips)
+                rec = dict(measured[key])
+                rec.update(meta)
+                rec["dips"] = [float(d) for d in dips]
+                results.append(rec)
+                csvw.add(rec)
+                print("[%s] dips=%s  RMS=%.6f  redu=%.3f%%  rough=%.4f  Mw=%.4f"
+                      % (meta.get("tag", ""), rec["dips"], rec["rms"],
+                         rec["redu_perc"], rec["rough"], rec["Mw"]), flush=True)
+                if best is None or rec["rms"] < best["rms"]:
+                    best = dict(measured[key])
+                batch_results.append(rec)
+            if keys:
+                print("  本批 %d 组计算完成，平均 %.1f s/组"
+                      % (len(keys), per_combo), flush=True)
+            return batch_results
+
         if args.mode == "each":
             cur = baseline[:]
             for rnd in range(1, max(1, args.rounds) + 1):
                 print("\n--- round %d (baseline=%s) ---" % (rnd, cur), flush=True)
                 for i in range(nseg):
+                    candidates = []
                     for d in seg_lists[i]:
                         dips = cur[:]
                         dips[i] = d
-                        do_combo(dips, mode="each", round=rnd, seg_varied=i + 1,
-                                 tag="r%d.s%d" % (rnd, i + 1))
+                        candidates.append((
+                            dips,
+                            dict(mode="each", round=rnd, seg_varied=i + 1,
+                                 tag="r%d.s%d" % (rnd, i + 1)),
+                        ))
+                    seg_recs = evaluate_batch(candidates)
                     # 该段更新为当轮最优 (在其扫描点中)
-                    seg_recs = [r for r in results
-                                if r.get("seg_varied") == i + 1 and r["round"] == rnd]
                     if seg_recs:
                         cur[i] = min(seg_recs, key=lambda r: r["rms"])["dips"][i]
                 print("round %d 结束: 当前最优 = %s" % (rnd, cur), flush=True)
         else:
-            for dips in itertools.product(*seg_lists):
-                do_combo(dips, mode="grid", round=1, seg_varied=0, tag="grid")
+            combinations = iter(itertools.product(*seg_lists))
+            batch_size = max(1, args.workers * 2)
+            while True:
+                batch = list(itertools.islice(combinations, batch_size))
+                if not batch:
+                    break
+                evaluate_batch([
+                    (dips, dict(mode="grid", round=1, seg_varied=0, tag="grid"))
+                    for dips in batch
+                ])
     finally:
+        if executor is not None:
+            executor.shutdown(wait=True)
         csvw.close()
 
-    assert best is not None and best_extras is not None
-    report_best(best, t_first or 0.0, len(results))
+    assert best is not None
+    # Recompute only the winner in the parent process to retain its large output arrays.
+    best_full = run_combo(state, best["dips"], backend=backend, max_nfev=max_nfev)
+    report_best(best_full, t_first or 0.0, len(results))
 
     # --- 最优组合的产出物 ---
     out_mat = os.path.join(args.out_dir, "py_dip_search_best.mat")
     _save_inversion_mat(
-        out_mat, best["slip"], best["rms"], best["rough"],
-        np.asarray([best["redu_perc"], best["exitflag"], best["rms"],
-                    best["Mw"], 0.0], dtype=np.float64),
-        best_extras, ramp_choice=cfg.ramp_choice,
+        out_mat, best_full["slip"], best_full["rms"], best_full["rough"],
+        np.asarray([best_full["redu_perc"], best_full["exitflag"], best_full["rms"],
+                    best_full["Mw"], 0.0], dtype=np.float64),
+        best_full["extras"], ramp_choice=cfg.ramp_choice,
     )
     out_png = os.path.join(args.out_dir, "best_slip_model.png")
     show_slip_model(
-        best["slip"],
+        best_full["slip"],
         ref_lon=cfg.ref_lon, lonc=cfg.lonc, latc=cfg.latc,
         fault=state.fault_abs if os.path.isfile(state.fault_abs) else None,
         out_path=out_png, show=False, block=False,
-        title="best dips %s (RMS=%.4f)" % (best["dips"], best["rms"]),
+        title="best dips %s (RMS=%.4f)" % (best_full["dips"], best_full["rms"]),
     )
     print("best slip model -> %s" % out_png, flush=True)
     plot_scan(results, nseg, os.path.join(args.out_dir, "rms_per_segment.png"),

@@ -72,8 +72,8 @@ iter_step=para(7);
 iter_step2=para(8);
 
 dip_angle=[82 82 82 82];%the array of fault ids that have dip angles not equal to 90 degrees
-% ramp_choice = "qu_ramp_7";
-ramp_choice = "no_ramp";
+ramp_choice = "qu_ramp_7";
+% ramp_choice = "no_ramp";
 % dip_angle = [62 88 91 97 ]
 % dip_angle = [65 65 80 80 ]
 % dip_angle = [60 60 80 100 ]

@@ -254,7 +254,7 @@ def plot_curves(results: Sequence[Dict[str, Any]], out_dir: str) -> None:
     rms = np.array([r["rms"] for r in results], dtype=np.float64)
     redu = np.array([r["redu_perc"] for r in results], dtype=np.float64)
     rough = np.array([r["roughness"] for r in results], dtype=np.float64)
-    x = np.log10(lams)
+    x = lams
 
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(6.5, 8.0), sharex=True)
     ax1.plot(x, rms, "-o", linewidth=1.5)
@@ -262,7 +262,7 @@ def plot_curves(results: Sequence[Dict[str, Any]], out_dir: str) -> None:
     ax1.grid(True)
     ax2.plot(x, redu, "-o", linewidth=1.5)
     ax2.set_ylabel("redu_perc (%)")
-    ax2.set_xlabel("Smoothness (log10)")
+    ax2.set_xlabel("Smoothness λ")
     ax2.grid(True)
     if np.any(np.abs(lams - 1.0) < 1e-9):
         for ax in (ax1, ax2):
@@ -522,13 +522,13 @@ def _parse_floats(text: str) -> List[float]:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(
-        description="make_rms.m 的 Python 移植: 对 Step 7 反演快照做平滑系数 λ 扫描, "
+        description="make_rms.m 的 Python 移植: 对 Step 5 反演快照做平滑系数 λ 扫描, "
                     "输出 RMS-λ 曲线、各 λ 滑移模型与逐轨道差异图.")
-    ap.add_argument("--snapshot", default="py_inversion_iint1.mat",
-                    help="反演快照 .mat (默认 py_inversion_iint1.mat, 即 Step 7)")
+    ap.add_argument("--snapshot", default="py_inversion_iint0.mat",
+                    help="反演快照 .mat (默认 py_inversion_iint0.mat, 即 Step 5)")
     ap.add_argument("--config-dir", default=_HERE,
                     help="configfile.txt / configpara.txt 所在目录 (默认脚本目录)")
-    ap.add_argument("--lambdas", default="0.1,0.5,0.8,1.0,1.2,1.5",
+    ap.add_argument("--lambdas", default="0.1,0.2,0.3,0.4,0.6,0.8,1.0,1.2,1.5,2,3",
                     help="逗号分隔的平滑系数序列")
     ap.add_argument("--con", default="0,0,0", help="滑移符号约束 strike,dip,normal")
     ap.add_argument("--slip-max", type=float, default=10.0, help="滑移上界 (m)")
