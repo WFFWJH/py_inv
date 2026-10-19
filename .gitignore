@@ -7,7 +7,8 @@ __pycache__/
 
 # 忽略 input_data 下所有内容
 make_rms_out/*
-dip_search_out/*
+comsol_inversion_out/*
+dip_search_out*/
 input_data/*
 # 保留 script_downsamp 目录
 !input_data/script_downsamp/
@@ -229,3 +230,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# 本地助手工作目录（非项目代码）
+.workbuddy-ai/
