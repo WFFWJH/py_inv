@@ -1,10 +1,154 @@
 import math
-from statistics import linear_regression
-from typing import Optional
+from dataclasses import dataclass
+from typing import Dict, Optional, Tuple
 
 import numpy as np
 
 from geodetic.coords import ll2xy, xy2xy
+
+
+@dataclass(frozen=True)
+class FaultLayout:
+    """Validated indexing and dimensions derived from one slip-model table."""
+
+    fault_segments_local: np.ndarray
+    patch_groups: Dict[Tuple[int, int], np.ndarray]
+    patch_counts: np.ndarray
+    patch_lengths: np.ndarray
+    layer_widths: np.ndarray
+    layer_offsets: np.ndarray
+    green_column_starts: np.ndarray
+
+
+def build_fault_layout(
+    fault_segments: np.ndarray,
+    slip_model: np.ndarray,
+    *,
+    lonc: float,
+    latc: float,
+    ref_lon: float,
+    layers: int,
+) -> FaultLayout:
+    """Derive COMSOL patch indexing from the geometry table used by inversion."""
+    fault = np.asarray(fault_segments, dtype=np.float64)
+    if fault.ndim == 1:
+        fault = fault.reshape(1, -1)
+    if fault.ndim != 2 or fault.shape[1] < 4:
+        raise ValueError("fault segments must contain lon1 lat1 lon2 lat2 columns")
+    fault = fault[:, :4]
+    if not np.all(np.isfinite(fault)):
+        raise ValueError("fault segment coordinates must be finite")
+
+    model = np.asarray(slip_model, dtype=np.float64)
+    if model.ndim != 2 or model.shape[1] < 8:
+        raise ValueError("slip_model must be a two-dimensional patch table")
+    if not np.all(np.isfinite(model[:, :8])):
+        raise ValueError("slip_model geometry columns must be finite")
+    if layers < 1:
+        raise ValueError("layers must be positive")
+
+    lon_endpoints = np.concatenate((fault[:, 0], fault[:, 2]))
+    lat_endpoints = np.concatenate((fault[:, 1], fault[:, 3]))
+    x_endpoints, y_endpoints = ll2xy(lon_endpoints, lat_endpoints, ref_lon)
+    x_origin, y_origin = ll2xy(lonc, latc, ref_lon)
+    n_segments = fault.shape[0]
+    local_segments = np.column_stack(
+        (
+            np.asarray(x_endpoints[:n_segments]) - x_origin,
+            np.asarray(y_endpoints[:n_segments]) - y_origin,
+            np.asarray(x_endpoints[n_segments:]) - x_origin,
+            np.asarray(y_endpoints[n_segments:]) - y_origin,
+        )
+    )
+    segment_lengths = np.hypot(
+        local_segments[:, 2] - local_segments[:, 0],
+        local_segments[:, 3] - local_segments[:, 1],
+    )
+    if np.any(segment_lengths <= 0.0):
+        raise ValueError("fault segments must have positive length")
+
+    segment_ids = np.rint(model[:, 0]).astype(np.int64)
+    layer_ids = np.rint(model[:, 2]).astype(np.int64)
+    if not np.allclose(model[:, 0], segment_ids) or not np.allclose(
+        model[:, 2], layer_ids
+    ):
+        raise ValueError("slip_model segment and layer IDs must be integers")
+    if np.any(segment_ids < 1) or np.any(segment_ids > n_segments):
+        raise ValueError("slip_model contains an out-of-range segment ID")
+    if np.any(layer_ids < 1) or np.any(layer_ids > layers):
+        raise ValueError("slip_model contains an out-of-range layer ID")
+
+    groups: Dict[Tuple[int, int], np.ndarray] = {}
+    patch_counts = np.zeros((n_segments, layers), dtype=np.int64)
+    patch_lengths = np.zeros((n_segments, layers), dtype=np.float64)
+    layer_widths = np.zeros(layers, dtype=np.float64)
+    for segment in range(1, n_segments + 1):
+        for layer in range(1, layers + 1):
+            rows = np.flatnonzero((segment_ids == segment) & (layer_ids == layer))
+            if rows.size == 0:
+                raise ValueError(
+                    f"slip_model has no patches for segment={segment}, layer={layer}"
+                )
+            patches = model[rows]
+            if rows.size > 1 and not np.all(np.diff(rows) == 1):
+                raise ValueError(
+                    f"patch rows are not contiguous for segment={segment}, layer={layer}"
+                )
+            patch_ids = np.rint(patches[:, 1]).astype(np.int64)
+            first_patch_id = int(patch_counts[segment - 1, : layer - 1].sum()) + 1
+            expected_patch_ids = np.arange(
+                first_patch_id, first_patch_id + rows.size
+            )
+            if not np.array_equal(patch_ids, expected_patch_ids):
+                raise ValueError(
+                    f"patch IDs must be sequential for segment={segment}, layer={layer}"
+                )
+
+            lengths, widths = patches[:, 6], patches[:, 7]
+            if np.any(lengths <= 0.0) or np.any(widths <= 0.0):
+                raise ValueError("patch lengths and widths must be positive")
+            if not np.allclose(lengths, lengths[0], rtol=1e-10, atol=1e-6):
+                raise ValueError(
+                    f"patch lengths differ within segment={segment}, layer={layer}"
+                )
+            if not np.allclose(widths, widths[0], rtol=1e-10, atol=1e-6):
+                raise ValueError(
+                    f"patch widths differ within segment={segment}, layer={layer}"
+                )
+            if not np.isclose(
+                np.sum(lengths), segment_lengths[segment - 1], rtol=1e-10, atol=1e-6
+            ):
+                raise ValueError(
+                    f"patches do not cover segment={segment}, layer={layer}"
+                )
+
+            patch_counts[segment - 1, layer - 1] = rows.size
+            patch_lengths[segment - 1, layer - 1] = lengths[0]
+            if segment == 1:
+                layer_widths[layer - 1] = widths[0]
+            elif not np.isclose(
+                layer_widths[layer - 1], widths[0], rtol=1e-10, atol=1e-6
+            ):
+                raise ValueError(f"layer width differs between fault segments at {layer}")
+            groups[(segment, layer)] = rows
+
+    layer_offsets = np.cumsum(layer_widths) - layer_widths
+    green_column_starts = np.zeros((n_segments, layers), dtype=np.int64)
+    column = 0
+    for segment in range(n_segments):
+        for layer in range(layers):
+            green_column_starts[segment, layer] = column
+            column += int(patch_counts[segment, layer])
+
+    return FaultLayout(
+        fault_segments_local=local_segments,
+        patch_groups=groups,
+        patch_counts=patch_counts,
+        patch_lengths=patch_lengths,
+        layer_widths=layer_widths,
+        layer_offsets=layer_offsets,
+        green_column_starts=green_column_starts,
+    )
 
 
 def load_fault_one_plane(
@@ -38,7 +182,10 @@ def load_fault_one_plane(
     else:
         dips = np.asarray(dip, dtype=np.float64).reshape(-1)
 
-    fault_data = np.loadtxt(fault_segment_file, dtype=np.float64)
+    if isinstance(fault_segment_file, np.ndarray):
+        fault_data = np.asarray(fault_segment_file, dtype=np.float64)
+    else:
+        fault_data = np.loadtxt(fault_segment_file, dtype=np.float64)
     if fault_data.ndim == 1:
         fault_data = fault_data.reshape(1, -1)
     if fault_data.shape[1] < 4:

@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "py-inv"
+version = "0.1.0"
+description = "InSAR coseismic fault-slip inversion using Okada elastic half-space models"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+]
+
+[project.optional-dependencies]
+grid = ["xarray>=2023.1", "h5netcdf>=1.0", "netCDF4>=1.6"]
+plot = ["matplotlib>=3.7"]
+numba = ["numba>=0.58"]
+comsol = ["mph>=1.2"]
+
+[project.scripts]
+py-inv = "run_inversion:main"
+py-inv-downsample = "input_data.script_downsamp.sample:main"
+py-inv-comsol-green = "comsol_scripts.comsol_run:main"
+py-inv-rms = "workflows.make_rms:main"
+py-inv-dip-search = "workflows.dip_search:main"
+
+[tool.setuptools]
+packages = [
+    "geodetic",
+    "workflows",
+    "comsol_scripts",
+    "input_data",
+    "input_data.script_downsamp",
+]
+py-modules = ["run_inversion", "slip_to_gmt"]

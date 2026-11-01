@@ -44,13 +44,14 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 from scipy.io import loadmat
 
+# Project root used for default configuration and output paths.
+_HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 from geodetic.constraints import add_col_of
 from geodetic.constraints import bounds_new
 from geodetic.solver import solve_bounded_lsq_u
 
 # 项目根目录（本包位于 <root>/workflows/ 下）—— 配置/输出的默认目录
-_HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
 # ---------------------------------------------------------------------------
 # 快照加载
 # ---------------------------------------------------------------------------
@@ -517,14 +518,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         except TypeError:
             matplotlib.use("Agg")
 
-    from geodetic.config import WorkflowConfig, load_workflow_config
+    from geodetic.config import load_workflow_config
 
     # --- 配置 (参考点 / 断层文件 / data_list) ---
-    try:
-        _root, cfg = load_workflow_config(args.config_dir)
-    except (FileNotFoundError, ValueError):
-        cfg = WorkflowConfig()
-        _root = args.config_dir
+    _root, cfg = load_workflow_config(args.config_dir)
     ref_lon, lonc, latc = cfg.ref_lon, cfg.lonc, cfg.latc
     max_nfev = args.max_nfev if args.max_nfev is not None else cfg.max_nfev
     fault_abs = cfg.fault_file

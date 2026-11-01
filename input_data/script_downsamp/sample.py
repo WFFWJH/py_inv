@@ -19,6 +19,7 @@ downlimit    : Nres_min —— 块边长达到此下限后不再按 RMS 分裂
 write_or_not : 1 则写结果文件
 plot_or_not  : 1 则弹窗画采样点
 type_samp    : 0 = 纯 Python 栈式四叉树; 1 = numba 加速 (推荐)
+               未安装 numba 时, type_samp=1 自动使用纯 Python 实现
 file1        : (可选) 伴随栅格，在 LOS 同一批盒子内取均值后写出
 
 输出文件
@@ -33,16 +34,31 @@ file1        : (可选) 伴随栅格，在 LOS 同一批盒子内取均值后写
 可选开关
 --------
 --initial-threshold  初始 RMS 阈值; 默认用数据 global_rms
---min-stop-mode      and | or  (最小块停止条件，默认 and；见四叉树分区注释)
+--min-stop-mode      and | or  (CLI 默认 or；Python subsample() API 默认 and)
 --representative     mean | median_pixel  (块代表点取法，默认 mean)
 """
 
 from pathlib import Path
-from typing import Optional
+import sys
+from typing import Optional, Sequence
 
 import numpy as np
-import matplotlib.pyplot as plt
-from numba import njit
+
+_PROJECT_ROOT = str(Path(__file__).resolve().parents[2])
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
+from geodetic.quadtree import decompose_quadtree
+
+try:
+    from numba import njit  # type: ignore[reportMissingImports]
+
+    NUMBA_AVAILABLE = True
+except ImportError:
+    NUMBA_AVAILABLE = False
+
+    def njit(func):
+        return func
 
 
 # =============================================================================
@@ -70,7 +86,7 @@ def read_grd(filename, engine: Optional[str] = None):
             pass
         engines.append(None)
         try:
-            import netcdf4  # noqa: F401
+            import netCDF4  # noqa: F401
             engines.append("netcdf4")
         except ImportError:
             pass
@@ -137,6 +153,8 @@ def _write_llde(outfile, x, y, z, weights):
 
 def _plot_subsample(x, y, z, title="Subsampled Points"):
     """散点图预览采样结果 (对称 jet 色标)。"""
+    import matplotlib.pyplot as plt
+
     plt.figure()
     cmap = plt.get_cmap("jet", 200)
     vmax = float(np.max(np.abs(z)))
@@ -236,39 +254,6 @@ def _parse_representative(representative: str) -> bool:
     )
 
 
-def _block_representative(
-    x, y, x_idx, y_idx, rows, cols, zdata, xmean, ymean, zmean, use_median_pixel,
-):
-    """决定一个接受块输出的 (x, y, z)。
-
-    mean 路径直接返回质心/均值；
-    median_pixel 路径在有效像素中找 z 最近中位数者，并列按距质心距离破平。
-    """
-    if not use_median_pixel or zdata.size == 1:
-        return xmean, ymean, zmean
-
-    zmed = float(np.median(zdata))
-    dz = np.abs(zdata - zmed)
-    tol = 1e-12 * max(abs(zmed), 1.0)
-    cand = np.flatnonzero(dz <= np.min(dz) + tol)
-    xc = x[x_idx[cols[cand]]]
-    yc = y[y_idx[rows[cand]]]
-    dxy2 = (xc - xmean) ** 2 + (yc - ymean) ** 2
-    pick = int(cand[int(np.argmin(dxy2))])
-    return (
-        float(x[x_idx[cols[pick]]]),
-        float(y[y_idx[rows[pick]]]),
-        float(zdata[pick]),
-    )
-
-
-def _block_at_min_size(lx, ly, nres_min, min_stop_and: bool) -> bool:
-    """当前块是否已到达最小尺寸停止条件。"""
-    if min_stop_and:
-        return lx <= nres_min and ly <= nres_min
-    return lx <= nres_min or ly <= nres_min
-
-
 def _alloc_block_buf(z):
     """预分配块结果缓冲 (nx*ny, 9)，足够容纳最坏情况下每像素一块。"""
     z = np.asarray(z)
@@ -279,20 +264,6 @@ def _alloc_block_buf(z):
 def _blocks_view(buf, n):
     """已写入 n 行后的 (n, 9) 视图。"""
     return buf[:n]
-
-
-def _append_one_block(buf, n, xmean, ymean, zmean, ngood, rms_block, xx1, xx2, yy1, yy2):
-    """把一个接受块写入 buf[n]，返回新的行数 n+1。"""
-    buf[n, 0] = xmean
-    buf[n, 1] = ymean
-    buf[n, 2] = zmean
-    buf[n, 3] = float(ngood)
-    buf[n, 4] = rms_block
-    buf[n, 5] = xx1
-    buf[n, 6] = xx2
-    buf[n, 7] = yy1
-    buf[n, 8] = yy2
-    return n + 1
 
 
 def _results_to_arrays(out):
@@ -321,6 +292,11 @@ def _quad_decomp_fill_out(
     """
     ts = int(type_samp)
     if ts == 1:
+        if not NUMBA_AVAILABLE:
+            return _quad_decomp_mean2(
+                x, y, z, threshold, nres_min, nres_max, buf, n,
+                min_stop_and=min_stop_and, use_median_pixel=use_median_pixel,
+            )
         return _quad_decomp_mean2_numba_fill(
             buf, n, x, y, z, threshold, nres_min, nres_max, min_stop_and,
             use_median_pixel,
@@ -722,89 +698,21 @@ def _quad_decomp_mean2(
     x, y, z, threshold, Nres_min, Nres_max, buf, n, min_stop_and=True,
     use_median_pixel=False,
 ):
-    """纯 Python 栈式四叉树 (type_samp=0)。逻辑与 numba 版一致，便于对照调试。"""
-    ny, nx = z.shape
-    stack = [(np.arange(nx), np.arange(ny))]
-    r_good_default = 0.4
-
-    while stack:
-        x_idx, y_idx = stack.pop()
-
-        zsub = z[np.ix_(y_idx, x_idx)]
-        indx_good = ~np.isnan(zsub)
-        ngood = int(np.sum(indx_good))
-
-        nx_sub = len(x_idx)
-        ny_sub = len(y_idx)
-        n_block = nx_sub * ny_sub
-
-        if ngood == 0:
-            continue
-
-        r_good = ngood / n_block
-        zdata = zsub[indx_good]
-        rows, cols = np.nonzero(indx_good)
-        xmean = float(np.mean(x[x_idx[cols]]))
-        ymean = float(np.mean(y[y_idx[rows]]))
-        zmean = float(np.mean(zdata))
-
-        if ngood == 1:
-            rms_true = 0.0
-            rms_for_split = _RMS_SPLIT_SINGLE
-        else:
-            rms_true = float(np.sqrt(np.mean((zdata - zmean) ** 2)))
-            rms_for_split = rms_true
-
-        lx = nx_sub
-        ly = ny_sub
-        need_split = False
-        can_split_x = lx >= 2
-        can_split_y = ly >= 2
-
-        if _block_at_min_size(lx, ly, Nres_min, min_stop_and) or not (
-            can_split_x or can_split_y
-        ):
-            if not (ngood > 0 and r_good > r_good_default):
-                continue
-        elif (lx > 2 and lx < Nres_max) and (ly > 2 and ly < Nres_max):
-            if rms_for_split > threshold:
-                need_split = True
-            elif not (r_good > r_good_default):
-                continue
-        else:
-            need_split = True
-
-        if need_split and (can_split_x or can_split_y):
-            nx_mid = nx_sub // 2
-            ny_mid = ny_sub // 2
-            # 不重叠划分: 子块严格小于父块
-            if can_split_x and can_split_y:
-                x_splits = [x_idx[:nx_mid], x_idx[nx_mid:]]
-                y_splits = [y_idx[:ny_mid], y_idx[ny_mid:]]
-                for ys_part in y_splits:
-                    for xs_part in x_splits:
-                        if len(xs_part) > 0 and len(ys_part) > 0:
-                            stack.append((xs_part, ys_part))
-            elif can_split_x:
-                for xs_part in (x_idx[:nx_mid], x_idx[nx_mid:]):
-                    if len(xs_part) > 0:
-                        stack.append((xs_part, y_idx))
-            else:
-                for ys_part in (y_idx[:ny_mid], y_idx[ny_mid:]):
-                    if len(ys_part) > 0:
-                        stack.append((x_idx, ys_part))
-        else:
-            xout, yout, zout = _block_representative(
-                x, y, x_idx, y_idx, rows, cols, zdata,
-                xmean, ymean, zmean, use_median_pixel,
-            )
-            n = _append_one_block(
-                buf, n, xout, yout, zout, ngood, rms_true,
-                float(x[x_idx[0]]), float(x[x_idx[-1]]),
-                float(y[y_idx[0]]), float(y[y_idx[-1]]),
-            )
-
-    return n
+    """Use the shared Python partitioner for the legacy buffer-based API."""
+    rows = decompose_quadtree(
+        x,
+        y,
+        z,
+        threshold,
+        Nres_min,
+        Nres_max,
+        min_stop_mode="and" if min_stop_and else "or",
+        representative="median_pixel" if use_median_pixel else "mean",
+    )
+    count = len(rows)
+    if count:
+        buf[n : n + count] = rows
+    return n + count
 
 
 def quad_decomp_mean2(x, y, z, threshold, Nres_min, Nres_max, min_stop_and=True):
@@ -994,8 +902,7 @@ def subsample1(
 # 5. 命令行入口
 # =============================================================================
 
-if __name__ == "__main__":
-
+def main(argv: Optional[Sequence[str]] = None) -> int:
     import argparse
 
     parser = argparse.ArgumentParser(
@@ -1033,7 +940,7 @@ if __name__ == "__main__":
         dest="min_stop_mode",
         default="or",
         choices=("and", "or"),
-        help="最小块停止条件: and=xy均达Nres_min(默认); or=MATLAB原版",
+        help="最小块停止条件: or=任一边达Nres_min(默认); and=两边均达",
     )
     parser.add_argument(
         "--representative",
@@ -1043,7 +950,7 @@ if __name__ == "__main__":
         help="块代表点: mean=块均值+质心; median_pixel=z近中位数的格点",
     )
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.file1 is None:
         subsample(
@@ -1072,3 +979,8 @@ if __name__ == "__main__":
             min_stop_mode=args.min_stop_mode,
             representative=args.representative,
         )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,60 +1,48 @@
-"""棋盘格测试的共享参数与观测网格 (供 :mod:`workflows.checkerboard` 使用).
+"""Lazy compatibility facade for the main-workflow COMSOL context.
 
-``fault_file`` 指向项目根目录的 ``checkerboard.txt``; ``xe`` / ``yn`` 为近断层加密的
-1D 观测网格 (单位 m), 用于 Okada 正演合成棋盘格观测。
+Importing this module is safe; configuration and MAT data are read only when a
+legacy COMSOL script accesses one of the exported attributes.
 """
-import os
+from __future__ import annotations
 
-import numpy as np
+def __getattr__(name: str):
+    if name == "PatchMapping":
+        from workflows.comsol_context import PatchMapping
 
-# 观测网格: x 在近断层加密 (-20~20 km 共 200 点), 两侧约 1 km 间距; y 覆盖 -20~120 km
-ny = 700
-x1d_m = np.unique(np.concatenate([
-    np.linspace(-50, -20, 50),
-    np.linspace(-20, 20, 200),
-    np.linspace(20, 50, 50),
-]))
-y1d_m = np.linspace(-20, 120, ny)
-X, Y = np.meshgrid(x1d_m, y1d_m)
-xe = X.ravel() * 1000.0  # km -> m
-yn = Y.ravel() * 1000.0
+        globals()[name] = PatchMapping
+        return PatchMapping
+    if name not in _CONTEXT_NAMES:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    from workflows.comsol_context import load_paragram_context
 
-# 断层参数 (项目根目录下的 checkerboard.txt 提供迹线)
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-fault_file = os.path.join(_PROJECT_ROOT, "checkerboard.txt")
-
-ref = dict(ref_lon=95, lonc=95.33, latc=19.61)
-axis_range = [0, 20, 0, 100, -20, 0]
-
-dip = [80]
-width = 20e3
-length = 100e3
-l_ratio = 1
-w_ratio = 1
-len_top = 10e3
-layers = 2
-n_layer = int(length / len_top)
-wid_top = float(width / layers)
-n_patch = n_layer * layers
+    try:
+        value = getattr(load_paragram_context(), name)
+    except AttributeError as exc:
+        raise AttributeError(
+            f"module {__name__!r} has no attribute {name!r}"
+        ) from exc
+    globals()[name] = value
+    return value
 
 
-# 棋盘格真值: 沿走向相邻 patch 交替 0/1, 逐层错开
-slip_matrix = np.zeros((layers, n_layer))
-one_layer_slip = np.zeros(n_layer)
-next_layer_slip = np.zeros(n_layer)
-for i in range(n_layer):
-    if i % 2 == 0:
-        one_layer_slip[i] = 1
-        next_layer_slip[i] = 0
-    else:
-        one_layer_slip[i] = 0
-        next_layer_slip[i] = 1
-for i in range(layers):
-    if i % 2 == 0:
-        slip_matrix[i, :] = one_layer_slip
-    else:
-        slip_matrix[i, :] = next_layer_slip
+def load_paragram_context(config_dir=None):
+    from workflows.comsol_context import load_paragram_context as load_context
 
-# COMSOL 参考模型文件名 (可选)
-top0_model = "top0_most_refine_extend.mph"
-top1_model = "top1_most_refine_extend.mph"
+    return load_context(config_dir)
+
+
+_CONTEXT_NAMES = {
+    "_root", "cfg", "ref_lon", "lonc", "latc", "ref", "axis_range", "dip",
+    "width", "len_top", "l_ratio", "w_ratio", "layers", "fault_file",
+    "tracks", "npt", "region", "dtypes", "nmin", "nmax", "iint", "nu",
+    "fault_type", "unit_slip", "fault_segments", "slip_model", "patch_groups",
+    "fault_segments_local", "layer_widths", "layer_offsets", "patch_counts",
+    "patch_lengths", "patch_mappings", "track_samples", "sampled_data",
+    "sampled_tracks", "sampled_point_indices", "xe", "yn", "coords",
+    "sampled_longitude", "sampled_latitude", "n_patch", "top0_model",
+    "top1_model",
+}
+
+
+def __dir__():
+    return sorted(set(globals()) | _CONTEXT_NAMES | {"PatchMapping"})

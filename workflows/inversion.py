@@ -12,7 +12,10 @@ MATLAB step numbers (3/5/6/7) map to phase names; see ``PHASE_ORDER``.
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
@@ -25,7 +28,11 @@ from geodetic.config import (
     read_data_list,
     resolve_under_root,
 )
-from geodetic.fault_geometry import load_fault_one_plane
+from geodetic.fault_geometry import (
+    FaultLayout,
+    build_fault_layout,
+    load_fault_one_plane,
+)
 from geodetic.insar_data import make_insar_data
 from geodetic.invert import build_greens_mat_dict, make_fault_from_insar1
 from geodetic.resample import resamp_insar_data
@@ -83,8 +90,10 @@ class InversionWorkflowState:
     fault_abs: str = ""
     seg_file_abs: str = ""
     dangles: List[float] = field(default_factory=list)
+    fault_layout: Optional[FaultLayout] = None
     nseg: int = 0
     ntrack: int = 0
+    fault_segments: Optional[np.ndarray] = None
 
     # --- round 1 (iter_step) ---
     out_mat: str = ""
@@ -226,6 +235,8 @@ def _show_slip(
     out_png: str,
     title: str,
     show_figure: bool,
+    plot_gmt: bool = False,
+    out_mat: str = "",
 ) -> None:
     cfg = _require_config(state)
     do_show = show_figure and os.environ.get("SHOW_SLIP", "1").strip() not in (
@@ -243,6 +254,26 @@ def _show_slip(
         fault=state.fault_abs, out_path=out_png,
         show=do_show, title=title, block=False,
     )
+    if plot_gmt:
+        project_root = Path(__file__).resolve().parents[1]
+        prefix = "slip_" + Path(out_mat).stem
+        from slip_to_gmt import write_slip_model_gmt
+
+        write_slip_model_gmt(
+            slip,
+            prefix=str(project_root / prefix),
+            ref_lon=cfg.ref_lon,
+            lonc=cfg.lonc,
+            latc=cfg.latc,
+        )
+        env = os.environ.copy()
+        env["PYTHON"] = sys.executable
+        subprocess.run(
+            ["bash", str(project_root / "plot_slip_gmt.sh"), prefix],
+            cwd=project_root,
+            check=True,
+            env=env,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -302,11 +333,25 @@ def step_load_fault(
     cfg = _require_config(state)
     if not state.dangles:
         raise ValueError("dip 角列表为空; 请先 step_load_config")
+    fault_segments = np.asarray(
+        np.loadtxt(state.fault_abs, dtype=np.float64), dtype=np.float64
+    )
+    if fault_segments.ndim == 1:
+        fault_segments = fault_segments.reshape(1, -1)
+    state.fault_segments = fault_segments[:, :4].copy()
     state.slip_vs = load_fault_one_plane(
-        state.fault_abs, dip=state.dangles,
+        state.fault_segments, dip=state.dangles,
         lonc=cfg.lonc, latc=cfg.latc, ref_lon=cfg.ref_lon,
         l_ratio=cfg.l_ratio, w_ratio=cfg.w_ratio,
         width=cfg.width, len_top=cfg.len_top, layers=cfg.layers,
+    )
+    state.fault_layout = build_fault_layout(
+        fault_segments[:, :4],
+        state.slip_vs,
+        lonc=cfg.lonc,
+        latc=cfg.latc,
+        ref_lon=cfg.ref_lon,
+        layers=cfg.layers,
     )
     if not quiet:
         print("slip_model_vs shape = %s" % (state.slip_vs.shape,), flush=True)
@@ -357,6 +402,9 @@ def invert_round(
     which: int = 1,
     *,
     show_figure: bool = True,
+    plot_gmt: bool = False,
+    use_rms_weight: bool = False,
+    use_topography: bool = False,
 ) -> None:
     """One invert + save + show round. ``which=1`` → Step 5; ``which=2`` → Step 7."""
     cfg = _require_config(state)
@@ -385,6 +433,8 @@ def invert_round(
         ref_lon=cfg.ref_lon, lonc=cfg.lonc, latc=cfg.latc,
         Con=cfg.con, model_type=cfg.model_type,
         backend=cfg.okada_backend, max_nfev=cfg.max_nfev, verbose=True,
+        use_rms_weight=use_rms_weight,
+        use_topography=use_topography,
     )
     save_inversion_mat(out_mat, slip, rms, rough, ret, extras, ramp_choice=cfg.ramp_choice)
 
@@ -395,8 +445,16 @@ def invert_round(
         state.slip2, state.rms2, state.rough2 = slip, rms, rough
         state.ret2, state.extras2 = ret, extras
 
-    if show_figure:
-        _show_slip(slip, state, out_png, title, show_figure=True)
+    if show_figure or plot_gmt:
+        _show_slip(
+            slip,
+            state,
+            out_png,
+            title,
+            show_figure=show_figure,
+            plot_gmt=plot_gmt,
+            out_mat=out_mat,
+        )
 
 
 def run_resamp(
@@ -447,6 +505,9 @@ def run(
     skip_downsample: bool = False,
     make_insar_save_plot: bool = True,
     show_figure: bool = True,
+    plot_gmt: bool = False,
+    use_rms_weight: bool = False,
+    use_topography: bool = False,
     dec: int = 1,
     patch_workers: Optional[int] = None,
     checkpoint_slip_mat: Optional[str] = None,
@@ -474,12 +535,18 @@ def run(
         if name == "downsample":
             run_downsample(state, skip=skip_downsample, save_plot=make_insar_save_plot)
         elif name == "invert1":
-            invert_round(state, which=1, show_figure=show_figure)
+            invert_round(
+                state, which=1, show_figure=show_figure, plot_gmt=plot_gmt,
+                use_rms_weight=use_rms_weight, use_topography=use_topography,
+            )
         elif name == "resamp":
             run_resamp(
                 state, dec=dec, patch_workers=patch_workers,
                 checkpoint_slip_mat=checkpoint_slip_mat,
             )
         elif name == "invert2":
-            invert_round(state, which=2, show_figure=show_figure)
+            invert_round(
+                state, which=2, show_figure=show_figure, plot_gmt=plot_gmt,
+                use_rms_weight=use_rms_weight, use_topography=use_topography,
+            )
     return state

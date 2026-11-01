@@ -17,7 +17,6 @@ import sys
 import time
 from typing import Sequence, Tuple
 
-import mph
 import numpy as np
 from scipy.io import loadmat, savemat
 
@@ -26,8 +25,12 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from geodetic.coords import ll2xy
-from workflows.inversion import InversionWorkflowState, step_load_config
+from geodetic.fault_geometry import FaultLayout
+from workflows.inversion import (
+    InversionWorkflowState,
+    step_load_config,
+    step_load_fault,
+)
 
 
 def _load_sample_points(
@@ -75,54 +78,16 @@ def _load_sample_points(
 
 def _fault_geometry(
     state: InversionWorkflowState,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    if state.config is None:
+) -> FaultLayout:
+    if state.config is None or not state.fault_abs:
         raise RuntimeError("请先运行 step_load_config 填充 state.config")
-    cfg = state.config
-    if not state.fault_abs or not os.path.isfile(state.fault_abs):
+    if not os.path.isfile(state.fault_abs):
         raise FileNotFoundError("断层文件不存在: %s" % state.fault_abs)
-
-    fault = np.asarray(np.loadtxt(state.fault_abs, dtype=np.float64), dtype=np.float64)
-    if fault.ndim == 1:
-        fault = fault.reshape(1, -1)
-    if fault.ndim != 2 or fault.shape[1] < 4:
-        raise ValueError("断层文件需要每段至少四列 lon1 lat1 lon2 lat2")
-    if len(state.dangles) != fault.shape[0]:
-        raise ValueError(
-            "断层段数 %d 与 state.dangles 数量 %d 不一致"
-            % (fault.shape[0], len(state.dangles))
-        )
-
-    lon_pt = np.concatenate((fault[:, 0], fault[:, 2]))
-    lat_pt = np.concatenate((fault[:, 1], fault[:, 3]))
-    xutm, yutm = ll2xy(lon_pt, lat_pt, cfg.ref_lon)
-    x_origin, y_origin = ll2xy(cfg.lonc, cfg.latc, cfg.ref_lon)
-    xpt = np.asarray(xutm - x_origin, dtype=np.float64)
-    ypt = np.asarray(yutm - y_origin, dtype=np.float64)
-
-    lengths = np.empty(fault.shape[0], dtype=np.float64)
-    for k in range(fault.shape[0]):
-        dx = xpt[k] - xpt[k + fault.shape[0]]
-        dy = ypt[k] - ypt[k + fault.shape[0]]
-        lengths[k] = np.hypot(dx, dy)
-    if np.any(lengths <= 0.0):
-        raise ValueError("断层端点重合，断层长度必须大于零")
-
-    layer_widths = cfg.width * np.power(cfg.w_ratio, np.arange(cfg.layers))
-    layer_widths = layer_widths / np.sum(layer_widths) * cfg.width
-    patch_counts = np.empty((fault.shape[0], cfg.layers), dtype=np.int64)
-    patch_lengths = np.empty_like(patch_counts, dtype=np.float64)
-    for k, length in enumerate(lengths):
-        for layer in range(cfg.layers):
-            rough_length = cfg.len_top * cfg.l_ratio**layer
-            count = max(1, int(np.floor(length / rough_length + 0.5)))
-            patch_counts[k, layer] = count
-            patch_lengths[k, layer] = length / count
-
-    layer_down = np.cumsum(layer_widths) - layer_widths
-    return xpt, ypt, patch_counts, patch_lengths, np.column_stack(
-        (layer_widths, layer_down)
-    )
+    if state.fault_layout is None:
+        step_load_fault(state, quiet=True)
+    if state.fault_layout is None:
+        raise RuntimeError("fault layout 未能从主反演几何构建")
+    return state.fault_layout
 
 
 def _interp_uvw(model, coordinates: np.ndarray) -> np.ndarray:
@@ -145,11 +110,13 @@ def _solve_layers(
     model,
     layer_range: Sequence[int],
     sample_points: np.ndarray,
-    geometry: Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    geometry: FaultLayout,
     green: np.ndarray,
     total_patches: int,
 ) -> None:
-    xpt, ypt, patch_counts, patch_lengths, layer_geometry = geometry
+    xpt, ypt, _, _ = geometry.fault_segments_local.T
+    patch_counts = geometry.patch_counts
+    patch_lengths = geometry.patch_lengths
     n_faults = patch_counts.shape[0]
     coordinates = np.vstack(
         (sample_points[:, 0], sample_points[:, 1], np.zeros(sample_points.shape[0]))
@@ -171,7 +138,8 @@ def _solve_layers(
         )
         for layer in layer_range:
             patch_length = patch_lengths[fault_index, layer]
-            patch_width, layer_down = layer_geometry[layer]
+            patch_width = geometry.layer_widths[layer]
+            layer_down = geometry.layer_offsets[layer]
             rectangle.set("size", [str(patch_length), str(patch_width)])
             for patch_index in range(patch_counts[fault_index, layer]):
                 rectangle.set(
@@ -179,8 +147,7 @@ def _solve_layers(
                     [str(patch_index * patch_length), str(layer_down)],
                 )
                 column = (
-                    int(np.sum(patch_counts[:fault_index]))
-                    + int(np.sum(patch_counts[fault_index, :layer]))
+                    int(geometry.green_column_starts[fault_index, layer])
                     + patch_index
                 )
 
@@ -241,8 +208,10 @@ def _run_model(
 def run_comsol(
     state: InversionWorkflowState,
     *,
-    top_model_path: str = "mphs/v1/touch.mph",
-    deep_model_path: str = "mphs/v1/touch_no_top.mph",
+    # top_model_path: str = "mphs/v3_belt_1/touch_low_belt.mph",
+    # deep_model_path: str = "mphs/v3_belt_1/touch_no_top_low_belt.mph",
+    top_model_path: str = "mphs/v1_3035/touch.mph",
+    deep_model_path: str = "mphs/v1_3035/touch_no_top.mph",
     uvw_output_path: str = "Green_comsol.mat",
     projected_output_path: str = "Green_comsolGD.mat",
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -259,6 +228,8 @@ def run_comsol(
     green = np.zeros((sample_points.shape[0], 2 * total_patches, 3))
     n_layers = state.config.layers
     start = time.perf_counter()
+    import mph
+
     client = mph.start()
     try:
         _run_model(
@@ -317,7 +288,11 @@ def run_comsol(
     return green, green_insar, green_azi
 
 
-if __name__ == "__main__":
+def main() -> None:
     workflow_state = InversionWorkflowState()
     step_load_config(workflow_state)
     run_comsol(workflow_state)
+
+
+if __name__ == "__main__":
+    main()

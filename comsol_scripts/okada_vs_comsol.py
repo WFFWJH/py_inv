@@ -1,377 +1,514 @@
-"""Compare Okada vs multiple COMSOL .mph models for one fault patch."""
-import os
-import sys
+"""Compare single-patch Okada and COMSOL displacements at four AZO tracks' samples.
 
-import matplotlib.pyplot as plt
-import mph
+List the available fault patches:
+    python -m comsol_scripts.okada_vs_comsol --list-patches
+
+Compare one patch (segment/layer/patch IDs are one-based):
+    python -m comsol_scripts.okada_vs_comsol --segment 2 --layer 3 --patch 5
+
+Patch IDs start at the second endpoint in the fault file (COMSOL's x1/y1 origin)
+and proceed toward its first endpoint. ``patch_index.csv`` records the
+matching Okada row, COMSOL model role, rectangle position, and rectangle size.
+Layer 1 uses the top model; all deeper layers use the no-top model.
+
+``--all-patches`` runs a separate COMSOL solve for every fault patch and may take
+many hours. Point-wise results and figures are saved under
+``comsol_scripts/okada_vs_comsol_out`` by default.
+"""
+from __future__ import annotations
+
+import argparse
+import csv
+import sys
+from pathlib import Path
+from typing import Dict, List, Optional, Sequence, Tuple
+
 import numpy as np
 
-# 项目根目录加入 sys.path，保证 geodetic / workflows 可导入
-_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _ROOT not in sys.path:
-    sys.path.insert(0, _ROOT)
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
-from geodetic.coords import xy2xy
-from geodetic.fault_geometry import load_fault_one_plane
+from geodetic.config import WorkflowConfig
+from geodetic.coords import ll2xy, xy2ll, xy2xy
 from geodetic.okada import calc_okada
-from geodetic.show_slip_model import show_slip_model
+from workflows import paragram
 
 
-
-PLOT = dict(
-    cmap="jet", figsize=(13, 12), dpi=120, digits=4,
-    interpolation="bilinear",   # nearest 会呈色块；bilinear 更接近原 scatter 观感
-    cbar_shrink=0.75, cbar_fraction=0.035, cbar_pad=0.02, cbar_labelpad=1,
-)
+PatchKey = Tuple[int, int]
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-COMPARE_FIGS = []  # 对比图窗；缩放后可同步视野，无需重算
-_SYNCING_VIEW = False
-
-
-def _apply_view(xlim, ylim):
-    """把 (xlim, ylim) 应用到所有对比图的数据轴（不含 colorbar）。"""
-    global _SYNCING_VIEW
-    if _SYNCING_VIEW:
-        return
-    _SYNCING_VIEW = True
-    try:
-        for fig in COMPARE_FIGS:
-            for ax in fig.axes:
-                if ax.images:
-                    ax.set_xlim(xlim)
-                    ax.set_ylim(ylim)
-            fig.canvas.draw_idle()
-    finally:
-        _SYNCING_VIEW = False
-
-
-def _bind_view_sync(fig):
-    """本图任一子图缩放后，同步到所有对比图窗。按 r 恢复全局范围。"""
-    def on_lim(_ax):
-        if _SYNCING_VIEW or _ax not in fig.axes or not _ax.images:
-            return
-        _apply_view(_ax.get_xlim(), _ax.get_ylim())
-
-    def on_key(event):
-        if event.key != "r" or not COMPARE_FIGS:
-            return
-        # 用第一幅图第一个 imshow 的 extent 恢复全图
-        for ax in COMPARE_FIGS[0].axes:
-            if ax.images:
-                x0, x1, y0, y1 = ax.images[0].get_extent()
-                _apply_view((x0, x1), (y0, y1))
-                break
-
-    for ax in fig.axes:
-        if ax.images:
-            ax.callbacks.connect("xlim_changed", on_lim)
-            ax.callbacks.connect("ylim_changed", on_lim)
-    fig.canvas.mpl_connect("key_press_event", on_key)
-
-
-def plot_field(ax, extent, value_2d, title, cbar_label, symmetric=False):
-    """Fast regular-grid plot via imshow."""
-    if symmetric:
-        vmax = float(np.max(np.abs(value_2d)))
-        vmin = -vmax
-    else:
-        vmin, vmax = float(np.min(value_2d)), float(np.max(value_2d))
-
-    im = ax.imshow(
-        value_2d,
-        origin="lower",
-        extent=extent,
-        aspect="equal",
-        cmap=PLOT["cmap"],
-        vmin=vmin,
-        vmax=vmax,
-        interpolation=PLOT["interpolation"],
-        resample=True,
-        rasterized=True,
-    )
-    ax.set(title=title, xlabel="x (km)", ylabel="y (km)")
-
-    cbar = plt.colorbar(
-        im, ax=ax,
-        shrink=PLOT["cbar_shrink"], fraction=PLOT["cbar_fraction"], pad=PLOT["cbar_pad"],
-    )
-    cbar.set_label(cbar_label, labelpad=PLOT["cbar_labelpad"])
-    dig = PLOT["digits"]
-    if symmetric:
-        cbar.set_ticks([vmin, 0, vmax])
-        cbar.set_ticklabels([f"min: {vmin:.{dig}f}", "0", f"max: {vmax:.{dig}f}"])
-    else:
-        cbar.set_ticks([vmin, vmax])
-        cbar.set_ticklabels([f"min: {vmin:.{dig}f}", f"max: {vmax:.{dig}f}"])
-
-
-def set_comsol_slip_bc(model, fault_type: int):
-    solid = model.component("comp1").physics("solid")
-    if fault_type == 1:  # strike-slip
-        direction = [["free"], ["prescribed"], ["free"]]
-        u0 = ([[0], [0.5], [0]], [[0], [0.5], [0]])
-    else:                # dip-slip
-        direction = [["prescribed"], ["free"], ["free"]]
-        u0 = ([[-0.5], [0], [0]], [[0.5], [0], [0]])
-    for feat, u in zip(("disp1", "disp2"), u0):
-        solid.feature(feat).set("Direction", direction)
-        solid.feature(feat).set("U0", u)
-
-
-def run_comsol(client, mph_path, L, W, i, j, fault_type, coords):
-    """Load mph, set patch, solve, return (u, v, w) at coords."""
-    model_java = client.load(mph_path)
-    model = model_java.java
-
-    geom_r1 = model.component("comp1").geom("geom1").feature("wp2").geom().feature("r1")
-    geom_r1.set("size", [str(L), str(W)])
-    geom_r1.set("pos", [str(L * j), str(W * i)])
-
-    set_comsol_slip_bc(model, fault_type)
-    model.sol("sol1").runAll()
-
-    model.result().numerical().create("uvw", "Interp")
-    interp = model.result().numerical("uvw")
-    interp.setInterpolationCoordinates(coords)
-    interp.set("expr", ["u", "v", "w"])
-    data = np.asarray(interp.getData())
-    client.remove(model_java)  # 释放内存
-    return data[0, 0], data[1, 0], data[2, 0]
-
-
-def plot_okada_vs_comsol(extent, shape, okada_uvw, comsol_uvw, mph_name):
-    """One figure window: Okada | COMSOL | Error for E/N/U."""
-    to2d = lambda a: np.asarray(a).reshape(shape)
-    ue, un, uz = map(to2d, okada_uvw)
-    cu, cv, cw = map(to2d, comsol_uvw)
-    panels = [("E", ue, cu), ("N", un, cv), ("U", uz, cw)]
-
-    # sharex/sharey: 本图任一侧栏放大，9 个子图视野一起变
-    fig, axes = plt.subplots(
-        3, 3, figsize=PLOT["figsize"], dpi=PLOT["dpi"],
-        sharex=True, sharey=True,
-    )
-    fig.suptitle(f"Okada vs {mph_name}", fontsize=14)
-    for row, (name, oka, cos) in enumerate(panels):
-        label = f"u{name.lower()} (m)"
-        plot_field(axes[row, 0], extent, oka, f"Okada: {name}", label)
-        plot_field(axes[row, 1], extent, cos, f"COMSOL: {name}", label)
-        plot_field(axes[row, 2], extent, cos - oka, f"Error: {name}", "error (m)")
-    fig.tight_layout()
-    COMPARE_FIGS.append(fig)
-    _bind_view_sync(fig)
-    return fig
-
-
-def _update_image(im, cbar, value_2d, symmetric=False):
-    if symmetric:
-        vmax = float(np.max(np.abs(value_2d)))
-        vmin = -vmax
-    else:
-        vmin, vmax = float(np.min(value_2d)), float(np.max(value_2d))
-    im.set_data(value_2d)
-    im.set_clim(vmin, vmax)
-    dig = PLOT["digits"]
-    if symmetric:
-        cbar.set_ticks([vmin, 0, vmax])
-        cbar.set_ticklabels([f"min: {vmin:.{dig}f}", "0", f"max: {vmax:.{dig}f}"])
-    else:
-        cbar.set_ticks([vmin, vmax])
-        cbar.set_ticklabels([f"min: {vmin:.{dig}f}", f"max: {vmax:.{dig}f}"])
-
-
-def _fill_combo(combo, items, current):
-    """Rebuild QComboBox items without emitting signals; keep current if possible."""
-    combo.blockSignals(True)
-    combo.clear()
-    combo.addItems(items)
-    if current in items:
-        combo.setCurrentText(current)
-    elif items:
-        combo.setCurrentIndex(0)
-    combo.blockSignals(False)
-    return combo.currentText()
-
-
-def plot_source_picker(results, extent):
-    """交互图：下拉选择两列数据源（不可重复），第三列画 A−B 差异。
-
-    results: {name: (E, N, U)}，每个分量为 shape=(NY, NX) 的 2D 数组。
-    依赖 Qt 后端 (QtAgg)；下拉框挂在工具栏上。
-    """
-    from matplotlib.backends.qt_compat import QtWidgets
-
-    names = list(results.keys())
-    if len(names) < 2:
-        raise ValueError("至少需要两个数据源才能对比")
-
-    comps = ("E", "N", "U")
-    state = {"a": names[0], "b": names[1], "busy": False}
-
-    fig, axes = plt.subplots(
-        3, 3, figsize=PLOT["figsize"], dpi=PLOT["dpi"],
-        sharex=True, sharey=True,
-    )
-    # fig.suptitle("Source picker: A | B | A−B", fontsize=14)
-
-    images, cbars = [], []
-    a_uvw, b_uvw = results[state["a"]], results[state["b"]]
-    for row, comp in enumerate(comps):
-        va, vb = a_uvw[row], b_uvw[row]
-        label = f"u{comp.lower()} (m)"
-        plot_field(axes[row, 0], extent, va, f"{state['a']}: {comp}", label)
-        plot_field(axes[row, 1], extent, vb, f"{state['b']}: {comp}", label)
-        plot_field(
-            axes[row, 2], extent, va - vb,
-            f"{state['a']} − {state['b']}: {comp}", "diff (m)",
+def _patch_row_index(
+    groups: Dict[PatchKey, np.ndarray],
+    segment: int,
+    layer: int,
+    patch: int,
+) -> int:
+    key = (segment, layer)
+    if key not in groups:
+        raise ValueError(f"No patches exist for segment={segment}, layer={layer}")
+    rows = groups[key]
+    if patch < 1 or patch > rows.size:
+        raise ValueError(
+            f"Patch {patch} is out of range for segment={segment}, layer={layer}; "
+            f"valid patch IDs are 1..{rows.size}"
         )
-        row_ims = [axes[row, c].images[0] for c in range(3)]
-        images.append(row_ims)
-        cbars.append([im.colorbar for im in row_ims])
-
-    fig.tight_layout()
-
-    def refresh():
-        a_uvw = results[state["a"]]
-        b_uvw = results[state["b"]]
-        for row, comp in enumerate(comps):
-            va, vb = a_uvw[row], b_uvw[row]
-            _update_image(images[row][0], cbars[row][0], va)
-            _update_image(images[row][1], cbars[row][1], vb)
-            _update_image(images[row][2], cbars[row][2], va - vb)
-            axes[row, 0].set_title(f"{state['a']}: {comp}")
-            axes[row, 1].set_title(f"{state['b']}: {comp}")
-            axes[row, 2].set_title(f"{state['a']} − {state['b']}: {comp}")
-        fig.canvas.draw_idle()
-
-    # 工具栏上挂两个 QComboBox 作为下拉栏
-    toolbar = fig.canvas.manager.toolbar
-    toolbar.addSeparator()
-    toolbar.addWidget(QtWidgets.QLabel(" A: "))
-    combo_a = QtWidgets.QComboBox()
-    combo_a.setMinimumWidth(160)
-    combo_a.addItems([n for n in names if n != state["b"]])
-    combo_a.setCurrentText(state["a"])
-    toolbar.addWidget(combo_a)
-
-    toolbar.addWidget(QtWidgets.QLabel(" B: "))
-    combo_b = QtWidgets.QComboBox()
-    combo_b.setMinimumWidth(160)
-    combo_b.addItems([n for n in names if n != state["a"]])
-    combo_b.setCurrentText(state["b"])
-    toolbar.addWidget(combo_b)
-
-    def on_a(text):
-        if state["busy"] or not text:
-            return
-        state["busy"] = True
-        try:
-            state["a"] = text
-            opts_b = [n for n in names if n != text]
-            state["b"] = _fill_combo(combo_b, opts_b, state["b"])
-            refresh()
-        finally:
-            state["busy"] = False
-
-    def on_b(text):
-        if state["busy"] or not text:
-            return
-        state["busy"] = True
-        try:
-            state["b"] = text
-            opts_a = [n for n in names if n != text]
-            state["a"] = _fill_combo(combo_a, opts_a, state["a"])
-            refresh()
-        finally:
-            state["busy"] = False
-
-    combo_a.currentTextChanged.connect(on_a)
-    combo_b.currentTextChanged.connect(on_b)
-
-    COMPARE_FIGS.append(fig)
-    _bind_view_sync(fig)
-    return fig
+    return paragram.patch_mappings[(segment, layer, patch)].row_index
 
 
-# ---------------------------------------------------------------------------
-# Fault geometry & selected patch
-# ---------------------------------------------------------------------------
-from workflows.paragram import  n_layer, len_top, layers, width,ref,axis_range,fault_file,l_ratio,w_ratio,dip,x1d_m,y1d_m, xe, yn
+def _write_patch_index(
+    output_file: Path,
+    slip_model: np.ndarray,
+    groups: Dict[PatchKey, np.ndarray],
+    cfg: WorkflowConfig,
+) -> None:
+    x_origin, y_origin = ll2xy(cfg.lonc, cfg.latc, cfg.ref_lon)
+    with output_file.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(
+            [
+                "segment_id",
+                "layer_id",
+                "patch_id_from_comsol_origin",
+                "comsol_model_role",
+                "comsol_green_column_0based",
+                "comsol_position_x_m",
+                "comsol_position_y_m",
+                "comsol_length_m",
+                "comsol_width_m",
+                "slip_model_row_0based",
+                "fault_geometry_patch_id_from_segment_start",
+                "center_x_m",
+                "center_y_m",
+                "center_longitude",
+                "center_latitude",
+                "center_depth_m",
+                "length_m",
+                "width_m",
+            ]
+        )
+        for (segment, layer), rows in sorted(groups.items()):
+            for patch_id in range(1, rows.size + 1):
+                mapping = paragram.patch_mappings[(segment, layer, patch_id)]
+                row_index = mapping.row_index
+                patch = slip_model[row_index]
+                theta = np.pi / 2.0 - np.radians(patch[8])
+                along_x, along_y = xy2xy(
+                    np.asarray(patch[6] * 0.5), np.asarray(0.0), -theta
+                )
+                down_x, down_y = xy2xy(
+                    np.asarray(0.0),
+                    np.asarray(-patch[7] * 0.5 * np.cos(np.radians(patch[9]))),
+                    -theta,
+                )
+                center_x = patch[3] + float(along_x) + float(down_x)
+                center_y = patch[4] + float(along_y) + float(down_y)
+                center_depth = -patch[5] + patch[7] * 0.5 * np.sin(
+                    np.radians(patch[9])
+                )
+                lon, lat = xy2ll(
+                    x_origin + center_x, y_origin + center_y, cfg.ref_lon
+                )
+                writer.writerow(
+                    [
+                        segment,
+                        layer,
+                        patch_id,
+                        mapping.model_role,
+                        mapping.green_column,
+                        f"{mapping.position_x:.12g}",
+                        f"{mapping.position_y:.12g}",
+                        f"{mapping.length:.12g}",
+                        f"{mapping.width:.12g}",
+                        row_index,
+                        int(round(patch[1])),
+                        f"{center_x:.12g}",
+                        f"{center_y:.12g}",
+                        f"{lon:.12g}",
+                        f"{lat:.12g}",
+                        f"{center_depth:.12g}",
+                        f"{patch[6]:.12g}",
+                        f"{patch[7]:.12g}",
+                    ]
+                )
 
-I, J = 0, 0                         # patch layer / along-strike index
-FAULT_TYPE = 1                     # 1: strike-slip, 2: dip-slip
-NU, U_SLIP = 0.25, 1.0
+
+def _set_comsol_slip_bc(model, fault_type: int) -> None:
+    solid = model.component("comp1").physics("solid")
+    if fault_type == 1:
+        direction = [["free"], ["prescribed"], ["free"]]
+        displacements = ([[0], [0.5], [0]], [[0], [0.5], [0]])
+    else:
+        direction = [["prescribed"], ["free"], ["free"]]
+        displacements = ([[-0.5], [0], [0]], [[0.5], [0], [0]])
+    for feature_name, displacement in zip(("disp1", "disp2"), displacements):
+        feature = solid.feature(feature_name)
+        feature.set("Direction", direction)
+        feature.set("U0", displacement)
 
 
-# 每组 (mph_I0, mph_Igt0)：I==0 用前者，否则用后者；每组开一个图窗
-MPH_GROUPS = [
-    ("top0.mph", "top1.mph"),
-    ("top0_infinit.mph","top1_infinit.mph"),
-    ("top0_tri.mph","11"),
-    ("top0_rec20.mph","11"),
-    ("top0_most_refine.mph","11"),
-    ("top0_most_refine_extend.mph","top1_most_refine_extend.mph")
-    # ("meshA0.mph", "meshA1.mph"),
-]
+def _run_comsol(
+    client,
+    model_path: Path,
+    segment_endpoints: np.ndarray,
+    patch_size: Tuple[float, float],
+    patch_position: Tuple[float, float],
+    fault_type: int,
+    coords: np.ndarray,
+) -> np.ndarray:
+    """Return one patch's COMSOL E/N/U displacements at all sample coordinates."""
+    model_java = client.load(str(model_path))
+    try:
+        model = model_java.java
+        params = model.param()
+        params.set("x0", f"{segment_endpoints[0]}[m]")
+        params.set("y0", f"{segment_endpoints[1]}[m]")
+        params.set("x1", f"{segment_endpoints[2]}[m]")
+        params.set("y1", f"{segment_endpoints[3]}[m]")
 
-slip_model = load_fault_one_plane(
-    fault_file, dip=dip, **ref, l_ratio=l_ratio, w_ratio=w_ratio,
-    width=width, len_top=len_top, layers=layers, coord_mode="local_xy",
-)
+        rectangle = (
+            model.component("comp1")
+            .geom("geom1")
+            .feature("wp2")
+            .geom()
+            .feature("r1")
+        )
+        rectangle.set("size", [str(patch_size[0]), str(patch_size[1])])
+        rectangle.set("pos", [str(patch_position[0]), str(patch_position[1])])
+        _set_comsol_slip_bc(model, fault_type)
+        model.sol("sol1").runAll()
 
-idx = I * n_layer + J
-assert slip_model[idx, 1] == idx + 1 and slip_model[idx, 2] == I + 1
-slip_model[idx, 11] = 1
-
-show_slip_model(
-    slip_model, **ref, axis_range=axis_range, apply_axis_range=True,
-    out_path="fault_one_plane.png", block=False,
-)
-
-xp, yp, zp, L, W, strike_deg, dip_deg = slip_model[idx, 3:10]
-d = max(-zp, 1e-10)
-delta = np.radians(dip_deg)
-strike = np.radians(strike_deg)
+        model.result().numerical().create("uvw", "Interp")
+        interp = model.result().numerical("uvw")
+        interp.setInterpolationCoordinates(coords)
+        interp.set("expr", ["u", "v", "w"])
+        values = np.asarray(interp.getData(), dtype=np.float64)
+        return np.column_stack((values[0, 0], values[1, 0], values[2, 0]))
+    finally:
+        client.remove(model_java)
 
 
-NX = x1d_m.size
-NY = y1d_m.size
-nobs = xe.size
-coords = np.array([xe, yn, np.zeros(nobs)])
-grid_shape = (NY, NX)
-extent_km = [x1d_m[0] / 1000, x1d_m[-1] / 1000, y1d_m[0] / 1000, y1d_m[-1] / 1000]
+def _run_okada(
+    patch: np.ndarray,
+    coords: np.ndarray,
+    fault_type: int,
+    nu: float,
+) -> np.ndarray:
+    xp, yp, zp, length, width, strike_deg, dip_deg = patch[3:10]
+    strike = np.radians(strike_deg)
+    delta = np.radians(dip_deg)
+    theta = np.pi / 2.0 - strike
+    dx, dy = xy2xy(np.asarray(length * 0.5), np.asarray(0.0), -theta)
+    east, north, up = calc_okada(
+        1.0,
+        paragram.unit_slip,
+        coords[0] - (xp + float(dx)),
+        coords[1] - (yp + float(dy)),
+        nu,
+        delta,
+        max(-float(zp), 1e-10),
+        length,
+        width,
+        fault_type,
+        strike,
+        np.zeros(coords.shape[1], dtype=np.float64),
+        backend="auto",
+    )
+    return np.column_stack((east, north, up))
 
-theta = np.pi / 2 - strike
-dx, dy = xy2xy(np.array(L * 0.5), np.array(0.0), -theta)
-xpt = xe - (xp + float(dx))
-ypt = yn - (yp + float(dy))
-tp = np.zeros(nobs)
 
-ue, un, uz = calc_okada(
-    1.0, U_SLIP, xpt, ypt, NU, delta, d, L, W, FAULT_TYPE, strike, tp, backend="auto",
-)
-okada_uvw = (ue, un, uz)
+def _project_azimuth(uvw: np.ndarray, look: np.ndarray) -> np.ndarray:
+    azimuth = -np.arctan2(look[:, 1], look[:, 0]) - np.pi
+    return uvw[:, 0] * np.sin(azimuth) + uvw[:, 1] * np.cos(azimuth)
 
-# ---------------------------------------------------------------------------
-# Loop MPH_GROUPS: pick by I, each group -> one comparison figure
-# ---------------------------------------------------------------------------
-to2d = lambda a: np.asarray(a, dtype=np.float64).reshape(grid_shape)
-results = {"Okada": tuple(to2d(a) for a in okada_uvw)}
 
-client = mph.start()
-for mph_i0, mph_igt0 in MPH_GROUPS:
-    mph_path = mph_i0 if I == 0 else mph_igt0
-    name = os.path.basename(mph_path)
-    print(f"=== {name} (I={I}): patch size=({L}, {W})  pos=({L * J}, {W * I}) ===")
-    comsol_uvw = run_comsol(client, mph_path, L, W, I, J, FAULT_TYPE, coords)
-    results[name] = tuple(to2d(a) for a in comsol_uvw)
-    plot_okada_vs_comsol(extent_km, grid_shape, okada_uvw, comsol_uvw, name)
+def _write_comparison_csv(
+    output_file: Path,
+    patch_id: Tuple[int, int, int],
+    row_index: int,
+    samples: np.ndarray,
+    tracks: np.ndarray,
+    point_indices: np.ndarray,
+    longitude: np.ndarray,
+    latitude: np.ndarray,
+    okada: np.ndarray,
+    comsol: np.ndarray,
+) -> None:
+    okada_az = _project_azimuth(okada, samples[:, 3:6])
+    comsol_az = _project_azimuth(comsol, samples[:, 3:6])
+    columns = [
+        "track",
+        "sample_index_0based",
+        "segment_id",
+        "layer_id",
+        "patch_id_from_comsol_origin",
+        "slip_model_row_0based",
+        "comsol_green_column_0based",
+        "longitude",
+        "latitude",
+        "local_x_m",
+        "local_y_m",
+        "observed_azimuth_cm",
+        "observed_azimuth_m",
+        "okada_e_m",
+        "okada_n_m",
+        "okada_u_m",
+        "comsol_e_m",
+        "comsol_n_m",
+        "comsol_u_m",
+        "difference_e_m",
+        "difference_n_m",
+        "difference_u_m",
+        "okada_azimuth_m",
+        "comsol_azimuth_m",
+        "difference_azimuth_m",
+    ]
+    segment, layer, patch = patch_id
+    with output_file.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(columns)
+        for index in range(samples.shape[0]):
+            writer.writerow(
+                [
+                    tracks[index],
+                    int(point_indices[index]),
+                    segment,
+                    layer,
+                    patch,
+                    row_index,
+                    paragram.patch_mappings[
+                        (segment, layer, patch)
+                    ].green_column,
+                    f"{longitude[index]:.12g}",
+                    f"{latitude[index]:.12g}",
+                    f"{samples[index, 0]:.12g}",
+                    f"{samples[index, 1]:.12g}",
+                    f"{samples[index, 2]:.12g}",
+                    f"{samples[index, 2] / 100.0:.12g}",
+                    *[f"{value:.12g}" for value in okada[index]],
+                    *[f"{value:.12g}" for value in comsol[index]],
+                    *[f"{value:.12g}" for value in comsol[index] - okada[index]],
+                    f"{okada_az[index]:.12g}",
+                    f"{comsol_az[index]:.12g}",
+                    f"{comsol_az[index] - okada_az[index]:.12g}",
+                ]
+            )
 
-plot_source_picker(results, extent_km)
-print("缩放: 工具栏放大任一侧栏即可；视野会同步。按 r 恢复全图。")
-print("Source picker: 顶部下拉选择 A/B（不可重复），第三列为 A−B。")
-plt.show()
+
+def _plot_comparison(
+    output_file: Path,
+    patch_label: str,
+    samples: np.ndarray,
+    longitude: np.ndarray,
+    latitude: np.ndarray,
+    okada: np.ndarray,
+    comsol: np.ndarray,
+    show: bool,
+) -> None:
+    import matplotlib.pyplot as plt
+
+    okada_az = _project_azimuth(okada, samples[:, 3:6])
+    comsol_az = _project_azimuth(comsol, samples[:, 3:6])
+    fields = [
+        ("East (m)", okada[:, 0], comsol[:, 0]),
+        ("North (m)", okada[:, 1], comsol[:, 1]),
+        ("Up (m)", okada[:, 2], comsol[:, 2]),
+        ("Azimuth projection (m)", okada_az, comsol_az),
+    ]
+    fig, axes = plt.subplots(
+        len(fields), 3, figsize=(15, 16), constrained_layout=True
+    )
+    fig.suptitle(f"Okada vs COMSOL at four tracks' sample points\n{patch_label}")
+    for row, (label, oka, cos) in enumerate(fields):
+        maximum = float(max(np.max(np.abs(oka)), np.max(np.abs(cos))))
+        maximum = maximum if maximum > 0 else 1.0
+        difference = cos - oka
+        error_max = float(np.max(np.abs(difference)))
+        error_max = error_max if error_max > 0 else 1.0
+        for column, (values, title, limits) in enumerate(
+            (
+                (oka, "Okada", (-maximum, maximum)),
+                (cos, "COMSOL", (-maximum, maximum)),
+                (difference, "COMSOL - Okada", (-error_max, error_max)),
+            )
+        ):
+            scatter = axes[row, column].scatter(
+                longitude,
+                latitude,
+                c=values,
+                cmap="jet",
+                vmin=limits[0],
+                vmax=limits[1],
+                s=7,
+            )
+            axes[row, column].set_title(f"{label}: {title}")
+            axes[row, column].set_xlabel("Longitude (deg)")
+            axes[row, column].set_ylabel("Latitude (deg)")
+            axes[row, column].set_aspect("equal", adjustable="datalim")
+            axes[row, column].grid(True, alpha=0.25)
+            fig.colorbar(scatter, ax=axes[row, column], shrink=0.8, label=label)
+    fig.savefig(output_file, dpi=180, bbox_inches="tight")
+    if show:
+        plt.show(block=False)
+    else:
+        plt.close(fig)
+
+
+def _make_parser(root: Path) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--segment", type=int, default=1, help="One-based fault segment ID.")
+    parser.add_argument("--layer", type=int, default=1, help="One-based down-dip layer ID.")
+    parser.add_argument(
+        "--patch",
+        type=int,
+        default=1,
+        help=(
+            "One-based patch ID from fault_trace.txt's second endpoint "
+            "(COMSOL x1/y1 origin), toward the first endpoint."
+        ),
+    )
+    parser.add_argument(
+        "--fault-type", type=int, choices=(1, 2), default=1
+    )
+    parser.add_argument("--nu", type=float, default=0.25)
+    parser.add_argument("--all-patches", action="store_true")
+    parser.add_argument("--list-patches", action="store_true")
+    parser.add_argument("--show", action="store_true", help="Display the saved figure.")
+    parser.add_argument(
+        "--top-model",
+        type=Path,
+        default=root / "touch.mph",
+        help="COMSOL template for layer 1.",
+    )
+    parser.add_argument(
+        "--deep-model",
+        type=Path,
+        default=root / "touch_no_top.mph",
+        help="COMSOL template for layers 2 and deeper.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=root / "comsol_scripts" / "okada_vs_comsol_out",
+    )
+    return parser
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    root_path = _ROOT
+    args = _make_parser(root_path).parse_args(argv)
+    context = paragram.load_paragram_context()
+    cfg = context.cfg
+    slip_model = context.slip_model
+    groups = context.patch_groups
+
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    index_file = args.output_dir / "patch_index.csv"
+    _write_patch_index(index_file, slip_model, groups, cfg)
+    if args.list_patches:
+        for (segment, layer), rows in sorted(groups.items()):
+            print(f"segment={segment} layer={layer} patches={rows.size}")
+        print(f"Patch location table: {index_file}")
+        return 0
+
+    if args.all_patches:
+        patch_ids = [
+            (segment, layer, patch)
+            for (segment, layer), rows in sorted(groups.items())
+            for patch in range(1, rows.size + 1)
+        ]
+    else:
+        patch_ids = [(args.segment, args.layer, args.patch)]
+
+    resolved_patch_ids: List[Tuple[int, int, int, int]] = []
+    for segment, layer, patch_id in patch_ids:
+        row_index = _patch_row_index(groups, segment, layer, patch_id)
+        mapping = paragram.patch_mappings[(segment, layer, patch_id)]
+        model_path = (
+            args.top_model if mapping.model_role == "top" else args.deep_model
+        )
+        if not model_path.is_file():
+            raise FileNotFoundError(f"COMSOL model not found: {model_path}")
+        resolved_patch_ids.append((segment, layer, patch_id, row_index))
+
+    samples = paragram.sampled_data
+    coords = paragram.coords
+    tracks = paragram.sampled_tracks
+    point_indices = paragram.sampled_point_indices
+    longitude = paragram.sampled_longitude
+    latitude = paragram.sampled_latitude
+
+    import matplotlib.pyplot as plt
+    import mph
+
+    client = mph.start()
+    try:
+        for segment, layer, patch_id, row_index in resolved_patch_ids:
+            patch = slip_model[row_index]
+            mapping = paragram.patch_mappings[(segment, layer, patch_id)]
+            model_path = (
+                args.top_model if mapping.model_role == "top" else args.deep_model
+            )
+
+            segment_endpoints = paragram.fault_segments_local[segment - 1]
+            okada = _run_okada(patch, coords, args.fault_type, args.nu)
+
+            label = (
+                f"segment_{segment:02d}_layer_{layer:02d}_patch_{patch_id:03d}"
+                f"_type_{args.fault_type}"
+            )
+            print(
+                f"{label}: slip_model_row={row_index}, "
+                f"COMSOL model={mapping.model_role} ({model_path.name}), "
+                f"position=({mapping.position_x:.1f}, "
+                f"{mapping.position_y:.1f}) m, "
+                f"size=({mapping.length:.1f}, {mapping.width:.1f}) m, "
+                f"samples={samples.shape[0]}",
+                flush=True,
+            )
+            comsol = _run_comsol(
+                client,
+                model_path,
+                segment_endpoints,
+                (mapping.length, mapping.width),
+                (mapping.position_x, mapping.position_y),
+                args.fault_type,
+                coords,
+            )
+
+            csv_path = args.output_dir / f"{label}.csv"
+            figure_path = args.output_dir / f"{label}.png"
+            _write_comparison_csv(
+                csv_path,
+                (segment, layer, patch_id),
+                row_index,
+                samples,
+                tracks,
+                point_indices,
+                longitude,
+                latitude,
+                okada,
+                comsol,
+            )
+            _plot_comparison(
+                figure_path,
+                label,
+                samples,
+                longitude,
+                latitude,
+                okada,
+                comsol,
+                args.show,
+            )
+            print(f"Saved {csv_path} and {figure_path}", flush=True)
+
+    finally:
+        client.clear()
+
+    if args.show:
+        plt.show()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

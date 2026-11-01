@@ -10,6 +10,7 @@ slip_model column convention (0-indexed here, matches load_fault_one_plane.py):
 """
 from __future__ import annotations
 
+from typing import Optional
 import numpy as np
 
 from geodetic.coords import xy2xy
@@ -20,7 +21,8 @@ def _build_green_patch_loop(data_slip_model: np.ndarray,
                             data_insar: np.ndarray,
                             projection: str,
                             nu: float = 0.25,
-                            backend: str = "auto") -> np.ndarray:
+                            backend: str = "auto",
+                            surface_elevation: Optional[np.ndarray] = None) -> np.ndarray:
     """Shared inner loop for LOS (insar) and azimuth offsets (AZO)."""
     d2r = np.pi / 180.0
     xp = data_slip_model[:, 3]
@@ -49,7 +51,12 @@ def _build_green_patch_loop(data_slip_model: np.ndarray,
     G = np.zeros((Nobs, Npara), dtype=np.float64)
 
     HF = 1.0
-    tp = np.zeros(Nobs, dtype=np.float64)
+    if surface_elevation is None:
+        tp = np.zeros(Nobs, dtype=np.float64)
+    else:
+        tp = np.asarray(surface_elevation, dtype=np.float64).reshape(-1)
+        if tp.size != Nobs or not np.all(np.isfinite(tp)):
+            raise ValueError("surface_elevation must contain one finite value per observation")
 
     for k in range(Npatch):
         strike_k = strkp[k] * d2r
@@ -86,16 +93,22 @@ def _build_green_patch_loop(data_slip_model: np.ndarray,
 def calc_green_insar_okada(data_slip_model: np.ndarray,
                            data_insar: np.ndarray,
                            nu: float = 0.25,
-                           backend: str = "auto") -> np.ndarray:
+                           backend: str = "auto",
+                           surface_elevation: Optional[np.ndarray] = None) -> np.ndarray:
     """data_insar columns: [xe, yn, los, ve, vn, vz]."""
-    return _build_green_patch_loop(data_slip_model, data_insar, "insar", nu, backend)
+    return _build_green_patch_loop(
+        data_slip_model, data_insar, "insar", nu, backend, surface_elevation
+    )
 
 
 def calc_green_AZO_okada(data_slip_model: np.ndarray,
                          data_insar: np.ndarray,
                          nu: float = 0.25,
-                         backend: str = "auto") -> np.ndarray:
+                         backend: str = "auto",
+                         surface_elevation: Optional[np.ndarray] = None) -> np.ndarray:
     """data_insar columns: [xe, yn, azo, ve, vn, vz]. Only ve, vn are used
     to reconstruct heading; the azo value itself lives in column 2.
     """
-    return _build_green_patch_loop(data_slip_model, data_insar, "AZO", nu, backend)
+    return _build_green_patch_loop(
+        data_slip_model, data_insar, "AZO", nu, backend, surface_elevation
+    )

@@ -154,6 +154,8 @@ def make_fault_from_insar1(slip_model_vs: np.ndarray,
                            ramp_choice: str = "none",
                            nu: float = 0.25,
                            backend: str = "auto",
+                           use_rms_weight: bool = False,
+                           use_topography: bool = False,
                save_greens_path: Optional[str] = None,
                max_nfev: int = 100,
                verbose: bool = True,
@@ -207,7 +209,11 @@ def make_fault_from_insar1(slip_model_vs: np.ndarray,
         dtype = paths_type[i]
 
         G_raw, G, bd_raw, bd = build_green_function(
-            slip_model, fname, dtype, ramp_choice, model_type=model_type, nu=nu, backend=backend)
+            slip_model, fname, dtype, ramp_choice,
+            model_type=model_type, nu=nu, backend=backend,
+            use_rms_weight=use_rms_weight,
+            use_topography=use_topography,
+        )
 
         if dtype == "azo":
             G_raw *= beta

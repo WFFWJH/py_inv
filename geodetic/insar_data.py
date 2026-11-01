@@ -27,6 +27,7 @@ import numpy as np
 
 # 复用 `geodetic.coords` 中已验证的横轴墨卡托投影。
 from geodetic.coords import ll2xy
+from geodetic.quadtree import decompose_quadtree
 
 
 # =====================================================================
@@ -96,7 +97,7 @@ def read_grd(filename, engine: Optional[str] = None):
             pass
         engines.append(None)
         try:
-            import netcdf4  # noqa: F401
+            import netCDF4  # noqa: F401
 
             engines.append("netcdf4")
         except ImportError:
@@ -177,9 +178,6 @@ def write_grd(x, y, z, filename):
 # =====================================================================
 # Quadtree downsampling
 # =====================================================================
-_R_GOOD_DEFAULT = 0.4
-
-
 def _results_to_arrays(out):
     if not out:
         empty = np.array([], dtype=np.float64)
@@ -190,93 +188,10 @@ def _results_to_arrays(out):
             arr[:, 5], arr[:, 6], arr[:, 7], arr[:, 8])
 
 
-def _block_at_min_size(lx, ly, nres_min):
-    """Match sample.py's default 'or' stopping rule."""
-    return lx <= nres_min or ly <= nres_min
-
-
 def _quad_decomp_sample(x, y, z, threshold, nres_min, nres_max, method):
-    """Stack-based, non-overlapping quadtree pass used by sample.py."""
-    ny, nx = z.shape
-    stack = [(np.arange(nx), np.arange(ny))]
-    out = []
-
-    while stack:
-        x_idx, y_idx = stack.pop()
-        zsub = z[np.ix_(y_idx, x_idx)]
-        valid = ~np.isnan(zsub)
-        ngood = int(valid.sum())
-        if ngood == 0:
-            continue
-
-        lx, ly = len(x_idx), len(y_idx)
-        r_good = ngood / (lx * ly)
-        zdata = zsub[valid]
-        rows, cols = np.nonzero(valid)
-        xdata = x[x_idx[cols]]
-        ydata = y[y_idx[rows]]
-        xmean = float(xdata.mean())
-        ymean = float(ydata.mean())
-        zmean = float(zdata.mean())
-
-        if ngood == 1:
-            rms_true = 0.0
-            rms_for_split = 1.0e30
-        elif method == "trend":
-            design = np.column_stack([xdata, ydata, np.ones(ngood)])
-            coeffs, *_ = np.linalg.lstsq(design, zdata, rcond=None)
-            residual = zdata - design @ coeffs
-            rms_true = float(np.sqrt(np.mean((zdata - zmean) ** 2)))
-            rms_for_split = float(np.sqrt(np.mean(residual ** 2)))
-        else:
-            rms_true = float(np.sqrt(np.mean((zdata - zmean) ** 2)))
-            rms_for_split = rms_true
-
-        can_split_x = lx >= 2
-        can_split_y = ly >= 2
-        need_split = False
-
-        if _block_at_min_size(lx, ly, nres_min) or not (
-            can_split_x or can_split_y
-        ):
-            if r_good <= _R_GOOD_DEFAULT:
-                continue
-        elif lx > 2 and lx < nres_max and ly > 2 and ly < nres_max:
-            if rms_for_split > threshold:
-                need_split = True
-            elif r_good <= _R_GOOD_DEFAULT:
-                continue
-        else:
-            need_split = True
-
-        if need_split and (can_split_x or can_split_y):
-            nx_mid, ny_mid = lx // 2, ly // 2
-            if can_split_x and can_split_y:
-                for ys_part in (y_idx[:ny_mid], y_idx[ny_mid:]):
-                    for xs_part in (x_idx[:nx_mid], x_idx[nx_mid:]):
-                        if xs_part.size and ys_part.size:
-                            stack.append((xs_part, ys_part))
-            elif can_split_x:
-                stack.extend(
-                    (xs_part, y_idx)
-                    for xs_part in (x_idx[:nx_mid], x_idx[nx_mid:])
-                    if xs_part.size
-                )
-            else:
-                stack.extend(
-                    (x_idx, ys_part)
-                    for ys_part in (y_idx[:ny_mid], y_idx[ny_mid:])
-                    if ys_part.size
-                )
-            continue
-
-        out.append((
-            xmean, ymean, zmean, ngood, rms_true,
-            float(x[x_idx[0]]), float(x[x_idx[-1]]),
-            float(y[y_idx[0]]), float(y[y_idx[-1]]),
-        ))
-
-    return out
+    return decompose_quadtree(
+        x, y, z, threshold, nres_min, nres_max, method=method
+    )
 
 
 def make_insar_downsample(xinsar, yinsar, zinsar, nmin, nres_min, nres_max,

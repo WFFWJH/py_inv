@@ -46,6 +46,8 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
+_HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 from geodetic.constraints import bounds_new  # noqa: F401  (经 make_fault_from_insar1 间接使用, 保持一致性)
 from geodetic.invert import make_fault_from_insar1
 from geodetic.show_slip_model import show_slip_model
@@ -56,10 +58,6 @@ from workflows.inversion import (
     step_load_config,
     step_load_fault,
 )
-
-# 项目根目录（本包位于 <root>/workflows/ 下）—— 配置/输出的默认目录
-_HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
 
 # ---------------------------------------------------------------------------
 # 倾角范围解析: "82" / "75,80,85" / "70:90:5" (等差, 含端点)

@@ -124,7 +124,7 @@ def calc_insar_patches_contrib_okada(
 
 
 if __name__ == "__main__":
-    from workflows.paragram import (
+    from workflows.paragram_checkboard import (
         axis_range,
         dip,
         fault_file,
@@ -139,13 +139,6 @@ if __name__ == "__main__":
         yn,
     )
 
-    # width = 20e3
-    # length = 100e3
-    # # len_top = 4e3
-    # # layers = 5
-    # len_top = 10e3
-    # layers = 2
-    # n_layer = int(length/len_top)
     slip_model = load_fault_one_plane(fault_file,dip=dip,
     **ref,
     l_ratio=l_ratio,

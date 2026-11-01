@@ -21,7 +21,7 @@ InSAR 同震断层滑动反演（Okada 弹性半空间模型）。
 
 ```
 py_inv/
-├── run_inversion.py          # 唯一命令行入口（改顶部 START / END 后运行）
+├── run_inversion.py          # 主工作流命令行入口
 │
 ├── geodetic/                 # 科学内核：纯计算，无副作用，可独立 import
 │   ├── config.py             #   配置解析（configfile.txt / configpara.txt / data_list）
@@ -47,7 +47,8 @@ py_inv/
 │   ├── checkerboard.py       #   棋盘格分辨率测试
 │   ├── dip_search.py         #   断层倾角网格搜索
 │   ├── make_rms.py           #   平滑系数 λ 扫描（L-curve）
-│   └── paragram.py           #   棋盘格测试的共享参数
+│   ├── paragram.py           #   COMSOL 对照共享主配置
+│   └── paragram_checkboard.py #  棋盘格测试的独立参数
 │
 ├── configfile.txt            # 路径配置
 ├── configpara.txt            # 数值与反演参数
@@ -69,32 +70,32 @@ py_inv/
 
 ## 安装
 
-开发环境为 Python 3.13。
+需要 Python 3.10 或更高版本。建议在虚拟环境中安装项目：
 
 ```bash
-pip install numpy scipy            # 必需
-pip install xarray                 # 读写 GMT netCDF .grd
-pip install matplotlib             # 绘图
-pip install numba                  # 可选：Okada 核加速（backend='numba'）
+python -m pip install -e .
+python -m pip install -e ".[grid,plot]"   # .grd 处理和绘图
+python -m pip install -e ".[numba]"       # 可选加速
+python -m pip install -e ".[comsol]"      # 可选 mph 接口；仍需本机安装 COMSOL
 ```
+
+Numba 未安装时，`geodetic` 与四叉树脚本仍可导入；降采样显式使用纯 Python 实现可设 `type_samp=0`，
+若保留 `type_samp=1`，也会自动回退到纯 Python 实现。
+纯 Python 包导入不要求安装绘图、NetCDF 或 COMSOL 依赖。
 
 ---
 
 ## 快速开始
 
 1. 准备好 `configfile.txt`、`configpara.txt` 与各道数据（见下方「配置说明」「数据组织」）。
-2. 编辑 `run_inversion.py` 顶部的阶段开关：
-
-   ```python
-   START = "invert1"
-   END   = "invert1"
-   ```
-
-3. 运行：
+2. 运行：
 
    ```bash
-   python run_inversion.py
+   py-inv --start invert1 --end invert1
    ```
+
+   也可使用 `python run_inversion.py` 或 `python -m workflows`。运行目录需包含配置文件，
+   或通过 `--config-dir` 显式指定配置目录。
 
 ---
 
@@ -109,15 +110,20 @@ pip install numba                  # 可选：Okada 核加速（backend='numba'�
 | `resamp` | Step 6 | 用模型场重新采样 | `<track>/los_samp{iter_step2}.mat` |
 | `invert2` | Step 7 | 二次反演 | `py_inversion_iint{iter_step2}.mat` + `_show_step7.png` |
 
-完整流程：
+仅运行首次反演（默认阶段）：
 
-```python
-START = "downsample"
-END   = "invert2"
+```bash
+py-inv --start invert1 --end invert1
 ```
 
-> 阶段执行前**总会**先加载配置与断层几何；若各道已有 `los_samp{iter_step}.mat`，
-> 可设 `SKIP_DOWNSAMPLE = True` 跳过 Step 3。
+完整流程（包括降采样、两轮反演）：
+
+```bash
+py-inv --start downsample --end invert2
+```
+
+阶段执行前**总会**先加载配置与断层几何。降采样输入和逐轨道中间结果仍保存在各自数据目录；
+可用 `--output-dir` 将反演快照和主图保存到单独目录。默认输出位置保持在项目根目录。
 
 反演内核的数据流：
 
@@ -228,13 +234,32 @@ input_data/data_v5_opt1/D106/
 ## 命令行工具
 
 ```bash
+py-inv --help                          # 主流程阶段和配置参数
+py-inv --config-dir . --start invert1 --end invert1
+py-inv --start downsample --end invert1 --output-dir results/run1 --no-show
+py-inv --start invert1 --end invert1 --rms-weight --surface-elevation
+py-inv-downsample los.grd 500 50 10 1 0 0  # 四叉树降采样 CLI
+py-inv-rms --help                      # 平滑系数扫描
+py-inv-dip-search --help               # 倾角搜索
 python run_inversion.py                 # 主流程
 python -m workflows.make_rms            # 平滑系数 λ 扫描（L-curve）→ make_rms_out/
 python -m workflows.dip_search          # 断层倾角网格搜索 → dip_search_out/
 python -m workflows.checkerboard        # 棋盘格分辨率测试（Okada 正演 → 反演还原）
+python slip_to_gmt.py --mat py_inversion_iint0.mat  # 导出 GMT 断层多边形
+bash plot_slip_gmt.sh slip              # GMT 绘制对应的 3D / 2D 图
 ```
 
+`workflows` 下的命令可通过安装生成的 `py-inv-*` 命令运行，也可用 `python -m workflows.<module>`。
 各脚本均支持 `--help`；`make_rms` / `dip_search` 的 `--config-dir`、`--out-dir` 默认指向项目根。
+主流程加 `--plot-gmt` 可在每轮反演后导出并调用 GMT；默认关闭，不会额外执行反演。
+每轮输出使用对应结果文件名作为前缀。该选项需要系统可用的
+Bash、Python 与 GMT；生成的 `.gmt` 数据文件和 PNG 图件写入项目根目录。
+`--rms-weight` 使用采样 MAT 中的 `rms_out` 反比加权（零值按 1 mm 下限处理）；
+`--surface-elevation` 将 `dem_out`（m）传给 Okada 计算作为观测点高程。两者默认关闭，
+不影响旧流程；启用选项时相应数据字段必须存在且有效。
+
+`slip_to_gmt.py` 也可作为 Python 模块导入；工作流直接把当前内存中的滑移模型传给导出函数，
+不会再次读取 MAT 文件或重新计算滑移。
 
 也可以直接当库用：
 
@@ -283,6 +308,11 @@ slip, rms, rough, ret, extras = make_fault_from_insar1(
 
 早期用于把 Okada 解析解与 COMSOL 有限元结果做交叉验证，**未接入主流程**。
 均需从项目根目录运行（脚本已自动把项目根加入 `sys.path`）：
+
+主流程 COMSOL 对照通过 `workflows.paragram` 延迟读取与反演主流程相同的
+`configfile.txt` / `configpara.txt`。普通导入不会加载配置、MAT 文件或启动求解；
+显式访问上下文时，COMSOL 直接复用反演几何生成的 patch 布局，不会重复执行 InSAR 反演。
+棋盘格对比脚本使用独立的 `workflows.paragram_checkboard` 参数。
 
 | 脚本 | 作用 | 依赖 |
 |---|---|---|

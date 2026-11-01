@@ -5,7 +5,7 @@
 反演结果写入 ``comsol_inversion_out/``。
 
 图件（全部为**真实三维坐标**下的断层图，无二维展开的比例失真）：
-  * ``slip3d_<模型>.png``   每个模型的滑移分布；多模型共用同一色标，可横向比较；
+  * ``slip3d_<模型>.png``   每个模型的滑移分布；多模型共用同一色标，可横向比较，标题标注各自最大滑移；
   * ``slip3d_diff_<模型>.png``  主结果 − 对比模型 的逐片元差值（对称色标）；
   * ``slip_comparison_stats.csv``  各模型 RMS/Mw/M0 与差值指标；
   * ``lam_*/track_*_misfit.png``  逐轨道 观测/模型/残差（可用 --no-track-plots 关掉）。
@@ -451,7 +451,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         help="只绘制 3D 滑移图，不生成逐轨道残差图",
     )
     parser.add_argument(
-        "--compare", action="append", default=[], metavar="LABEL=PATH",
+        #"v0=mphs/v0/comsol_inversion_out/comsol_inversion.mat"
+        "--compare", action="append", default=["v0=mphs/v0/comsol_inversion_out/comsol_inversion.mat"], metavar="LABEL=PATH",
         help="额外对比的滑移模型 .mat（需含 slip_model）；可重复，"
              "例如 Okada=py_inversion_iint0.mat 或 COMSOL_v2=other/comsol_inversion.mat",
     )
@@ -584,7 +585,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         _assert_same_geometry(main_case.slip_model, case.slip_model, case.label)
 
     all_cases = [main_case] + compare_cases
-    # 所有 3D 图共用同一色标上限，颜色才可横向比较
+    # 所有 3D 图共用同一色标上限，标题另标各模型自身的最大值
     vmax3d = max(float(np.max(c.magnitude)) for c in all_cases)
 
     if not args.no_3d:
@@ -599,12 +600,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 out_path=png,
                 show=False,
                 vmax=vmax3d,
-                title="%s  (λ=%g, RMS=%s, Mw=%s)"
+                title="%s  (λ=%g, RMS=%s, Mw=%s, max|slip|=%.4f m)"
                 % (
                     case.label,
                     result["lam"],
                     "-" if case.rms is None else "%.4f" % case.rms,
                     "-" if case.mw is None else "%.3f" % case.mw,
+                    float(np.max(case.magnitude)),
                 ),
             )
             print("3D 滑移图 -> %s" % png, flush=True)

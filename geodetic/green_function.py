@@ -6,10 +6,12 @@ Returns G_raw, G, bdata_raw, bdata where:
   bdata_raw = sampled LOS / AZO value     shape (n_obs,)
   bdata = diag(w) * bdata_raw
 
-Uniform weighting: w_i = (1/rms_i) / sum(1/rms_i) with rms_i = 1 --> w = 1/n_obs.
+Default weighting is uniform. Optional RMS weighting uses
+``w_i = (1/rms_i) / sum(1/rms_i)`` with a 1 mm floor for zero/small RMS.
 """
 from __future__ import annotations
 
+import warnings
 from typing import Tuple
 
 import numpy as np
@@ -41,19 +43,54 @@ def build_green_function(slip_model: np.ndarray,
                          ramp_choice: str,
                          model_type: str = "okada",
                          nu: float = 0.25,
-                         backend: str = "auto") -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+                         backend: str = "auto",
+                         *,
+                         use_rms_weight: bool = False,
+                         use_topography: bool = False) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     data = loadmat(sampled_data_file)
     sampled = np.asarray(data["sampled_insar_data"], dtype=np.float64)
-    dem_out = np.asarray(data.get("dem_out", np.zeros(sampled.shape[0])), dtype=np.float64)
+    if sampled.ndim != 2 or sampled.shape[1] < 6:
+        raise ValueError(
+            "%s: sampled_insar_data must have shape (N, >=6), got %r"
+            % (sampled_data_file, sampled.shape)
+        )
+    if "dem_out" not in data:
+        if use_topography:
+            raise KeyError(
+                "%s does not contain 'dem_out'; topography was requested."
+                % sampled_data_file
+            )
+        warnings.warn(
+            "%s does not contain 'dem_out'; using zeros for the ramp DEM column."
+            % sampled_data_file,
+            UserWarning,
+            stacklevel=2,
+        )
+        dem_out = np.zeros(sampled.shape[0], dtype=np.float64)
+    else:
+        dem_out = np.asarray(data["dem_out"], dtype=np.float64).reshape(-1)
+        if dem_out.size != sampled.shape[0] or not np.all(np.isfinite(dem_out)):
+            raise ValueError(
+                "%s: dem_out must contain one finite value per observation"
+                % sampled_data_file
+            )
+
+    surface_elevation = dem_out if use_topography else None
 
     if model_type.lower() != "okada":
         raise NotImplementedError("Only 'okada' model_type is supported in this Python port.")
 
     opt = option.lower()
     if opt == "insar":
-        G_green = calc_green_insar_okada(slip_model, sampled, nu=nu, backend=backend)
+        G_green = calc_green_insar_okada(
+            slip_model, sampled, nu=nu, backend=backend,
+            surface_elevation=surface_elevation,
+        )
     elif opt == "azo":
-        G_green = calc_green_AZO_okada(slip_model, sampled, nu=nu, backend=backend)
+        G_green = calc_green_AZO_okada(
+            slip_model, sampled, nu=nu, backend=backend,
+            surface_elevation=surface_elevation,
+        )
     else:
         raise ValueError(f"Unsupported option: {option!r}; only 'insar' and 'AZO' are implemented.")
 
@@ -63,7 +100,25 @@ def build_green_function(slip_model: np.ndarray,
     G_raw = np.concatenate([G_green, ramp], axis=1).astype(np.float64, copy=False)
 
     h1 = sampled.shape[0]
-    rms_insar = np.ones(h1, dtype=np.float64)
+    if use_rms_weight:
+        if "rms_out" not in data:
+            raise KeyError(
+                "%s does not contain 'rms_out'; RMS weighting was requested."
+                % sampled_data_file
+            )
+        rms_insar = np.asarray(data["rms_out"], dtype=np.float64).reshape(-1)
+        if (
+            rms_insar.size != h1
+            or not np.all(np.isfinite(rms_insar))
+            or np.any(rms_insar < 0.0)
+        ):
+            raise ValueError(
+                "%s: rms_out must contain one finite non-negative value per observation"
+                % sampled_data_file
+            )
+        rms_insar = np.maximum(rms_insar, 1e-3)
+    else:
+        rms_insar = np.ones(h1, dtype=np.float64)
     w_data = 1.0 / rms_insar
     w_vec = w_data / w_data.sum()
 

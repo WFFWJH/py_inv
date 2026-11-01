@@ -10,12 +10,16 @@ make_rms_out/*
 comsol_inversion_out/*
 dip_search_out*/
 input_data/*
+mph/*
 # 保留 script_downsamp 目录
 !input_data/script_downsamp/
 !input_data/script_downsamp/**
+!input_data/README.md
+!input_data/__init__.py
 input_data/script_downsamp/__pycache__/
 # large files
 *.npy
+*.gmt
 *.mph
 *.mph.lock
 *.grd
